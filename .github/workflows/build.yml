@@ -42,10 +42,10 @@ jobs:
         include:
           - name: Linux
             os: ubuntu-24.04
-            artifact: game-server-linux
+            artifact: resrev1srv-linux
           - name: Windows
             os: windows-2022
-            artifact: game-server-windows
+            artifact: resrev1srv-windows
 
     steps:
       - uses: actions/checkout@v7
@@ -67,7 +67,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir dist
-          cp build/game-server README.md dist/
+          cp build/resrev1srv README.md dist/
 
       - name: Collect (Windows)
         if: runner.os == 'Windows'
