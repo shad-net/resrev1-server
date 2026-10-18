@@ -1,0 +1,13 @@
+version = 1
+
+[[annotations]]
+path = [
+    "REUSE.toml",
+    "CMakeSettings.json",
+    ".github/workflows/*.*",
+    ".gitignore",
+    "README.md"
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "shadNet Custom Server Project"
+SPDX-License-Identifier = "GPL-2.0-or-later"

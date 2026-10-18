@@ -1,0 +1,8 @@
+build/
+*.sqlite
+*.sqlite-*
+*.log
+*.log.1
+config.json
+
+/.vs/
