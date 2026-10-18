@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 shadNet Custom Server Project
+// SPDX-FileCopyrightText: Copyright 2026 Resident Evil Revelations Custom Server Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "handler.h"
