@@ -23,7 +23,6 @@ FileLog& state() {
     return log;
 }
 
-// Called with the mutex held.
 void restart(FileLog& log) {
     log.file.close();
     if (!log.file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {

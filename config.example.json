@@ -1,0 +1,82 @@
+{
+    "_note": "Keys starting with _ are ignored. See the README for the reward values tested in game. Event values are untested placeholders.",
+    "listen": {
+        "address": "0.0.0.0",
+        "port": 8080
+    },
+    "base_path": "/residentevil/revelations/psn2",
+    "database": "revelations.sqlite",
+    "shadnet": {
+        "url": "http://127.0.0.1:31315"
+    },
+    "admin": {
+        "address": "127.0.0.1",
+        "port": 8081,
+        "key": "change-me-to-a-long-random-key"
+    },
+    "log": {
+        "file": "revelations.log",
+        "max_size_mb": 10
+    },
+    "rewards": [
+        {
+            "serial": 1001,
+            "type": "relief",
+            "relief_type": 1,
+            "relief_count": 3
+        },
+        {
+            "serial": 1002,
+            "type": "gacha",
+            "gacha_type": 2,
+            "gacha_grade": 1
+        },
+        {
+            "serial": 1003,
+            "type": "parts",
+            "parts_id": 7
+        },
+        {
+            "serial": 1004,
+            "type": "weapon",
+            "weapon_id": 12,
+            "weapon_rarity": 2,
+            "weapon_slot": 3,
+            "weapon_randomtag": true
+        }
+    ],
+    "event": {
+        "subjugation_enemy_id": [
+            3,
+            5
+        ],
+        "subjugation_exp": [
+            15,
+            20
+        ],
+        "weekend_type": 1,
+        "weekend_discount_rate": 5,
+        "weekend_item_item_id": [
+            4
+        ],
+        "weekend_item_price": [
+            1000
+        ],
+        "participate_serial_id": 77,
+        "participate_event_id": 2,
+        "special_serial_id": 88,
+        "special_event_id": 3,
+        "special_exp_rate": 20,
+        "special_wanted_rate": 15,
+        "discount_event_id": 1,
+        "discount_exp_rate": 10,
+        "collaboration_wanted_name": [
+            "HUNK",
+            "JILL"
+        ],
+        "collaboration_wanted_serial_id": [
+            11,
+            12
+        ]
+    }
+}
