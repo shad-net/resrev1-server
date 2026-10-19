@@ -39,6 +39,10 @@ constexpr Counter Counters[] = {
     {"stages_cleared", 0x11a8},
 };
 
+quint16 u16(const QByteArray& d, qsizetype offset) {
+    return qFromLittleEndian<quint16>(d.constData() + offset);
+}
+
 quint32 u32(const QByteArray& d, qsizetype offset) {
     return qFromLittleEndian<quint32>(d.constData() + offset);
 }
@@ -60,8 +64,12 @@ QString fieldName(qsizetype offset) {
     }
     for (const Table& t : Tables) {
         if (offset >= t.offset && offset < t.offset + t.count * RecordSize) {
-            static const char* fields[] = {
-                "rank/byte1/accuracy", "enemies", "clear_time", "damage", "clears", "first_set"};
+            static const char* fields[] = {"rank/byte1/accuracy",
+                                           "enemies/failed",
+                                           "clear_time",
+                                           "damage",
+                                           "plays",
+                                           "first_set"};
             const qsizetype rel = offset - t.offset;
             return QStringLiteral("%1%2.%3")
                 .arg(QLatin1String(t.name))
@@ -120,10 +128,11 @@ QJsonObject decodeUpload(const QByteArray& d) {
                 {"rank", byte(0)},
                 {"unknown1", byte(1)},
                 {"accuracy", byte(2)},
-                {"enemies", qint64(u32(d, o + 4))},
+                {"enemies", qint64(u16(d, o + 4))},
+                {"failed", qint64(u16(d, o + 6))},
                 {"clear_time", qint64(time)},
                 {"damage", qint64(damage)},
-                {"clears", qint64(u32(d, o + 16))},
+                {"plays", qint64(u32(d, o + 16))},
                 {"first_set", qint64(u32(d, o + 20))},
             });
         }
@@ -176,7 +185,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
         qint64 damage = -1, damageAt = 0;
         qint64 accuracy = -1, accuracyAt = 0;
         qint64 enemies = -1, enemiesAt = 0;
-        qint64 clears = 0;
+        qint64 plays = 0;
     };
     QVector<Best> bests;
     const auto find = [&](const QString& table, int index) -> Best& {
@@ -192,7 +201,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
         const QJsonArray records = decodeUpload(data).value("records").toArray();
         for (const QJsonValue& v : records) {
             const QJsonObject r = v.toObject();
-            if (r.value("clears").toInteger() <= 0) {
+            if (r.value("clear_time").toInteger() == 3600000) {
                 continue;
             }
             Best& b = find(r.value("table").toString(), int(r.value("index").toInteger()));
@@ -221,7 +230,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
                 b.enemies = enemies;
                 b.enemiesAt = received;
             }
-            b.clears = std::max(b.clears, r.value("clears").toInteger());
+            b.plays = std::max(b.plays, r.value("plays").toInteger());
         }
     }
     QJsonArray out;
@@ -239,7 +248,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
             {"accuracy_at", b.accuracyAt},
             {"enemies", b.enemies},
             {"enemies_at", b.enemiesAt},
-            {"clears", b.clears},
+            {"plays", b.plays},
         });
     }
     return out;
