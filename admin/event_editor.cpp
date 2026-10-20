@@ -2,20 +2,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "event_editor.h"
-
 #include "reward_catalog.h"
-
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QJsonArray>
+#include <QStyledItemDelegate>
+
+#include <cmath>
 #include <QLabel>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -69,7 +70,6 @@ public:
     void setModelData(QWidget* editor, QAbstractItemModel* model,
                       const QModelIndex& index) const override {
         auto* box = static_cast<QComboBox*>(editor);
-        // The leading number is the ID, whether picked from the list or typed.
         const QString text = box->currentText().trimmed().section(' ', 0, 0);
         model->setData(index, text);
     }
@@ -78,47 +78,77 @@ private:
     QVector<QPair<int, QString>> names_;
 };
 
-QGroupBox* group(const QString& title, QLayout* layout, const QString& note = {}) {
+QGroupBox* section(const QString& title, const QString& help, QLayout* fields,
+                   const QString& details = {}) {
     auto* box = new QGroupBox(title);
-    if (!note.isEmpty()) {
-        auto* wrap = new QVBoxLayout;
-        auto* label = new QLabel(note);
-        label->setWordWrap(true);
-        label->setForegroundRole(QPalette::PlaceholderText);
-        wrap->addWidget(label);
-        wrap->addLayout(layout);
-        box->setLayout(wrap);
-    } else {
-        box->setLayout(layout);
+    auto* wrap = new QVBoxLayout(box);
+    auto* label = new QLabel(help);
+    label->setWordWrap(true);
+    wrap->addWidget(label);
+    wrap->addLayout(fields);
+    wrap->addStretch(1); // keep the fields together at the top when the row is taller
+    if (!details.isEmpty()) {
+        box->setToolTip(details);
     }
     return box;
 }
 
+QString untested(const QString& title) {
+    return title + QObject::tr("  (not tested in game yet)");
+}
+
+QWidget* labelled(const QString& text, QWidget* field) {
+    auto* w = new QWidget;
+    auto* l = new QHBoxLayout(w);
+    l->setContentsMargins(0, 0, 0, 0);
+    auto* label = new QLabel(text);
+    label->setMinimumWidth(170);
+    l->addWidget(label);
+    l->addWidget(field, 1);
+    return w;
+}
+
 } // namespace
 
-QSpinBox* EventEditor::scalar(const char* key, qint64 max) {
-    auto* box = new QSpinBox;
-    box->setRange(-1, int(max));
+QDoubleSpinBox* EventEditor::number(const char* key, double max, double scale,
+                                    const QString& prefix, const QString& suffix, int decimals) {
+    auto* box = new QDoubleSpinBox;
+    box->setDecimals(decimals);
+    box->setRange(-1, max);
     box->setSpecialValueText(tr("not set"));
     box->setValue(-1);
-    box->setToolTip(QString::fromLatin1(key));
-    scalars_.append({key, box});
+    box->setPrefix(prefix);
+    box->setSuffix(suffix);
+    box->setToolTip(tr("Sent as %1").arg(QLatin1String(key)));
+    numbers_.append({key, box, scale});
+    return box;
+}
+
+QComboBox* EventEditor::choice(const char* key, const Names& items) {
+    auto* box = new QComboBox;
+    for (const auto& [value, text] : items) {
+        box->addItem(text, value);
+    }
+    box->setToolTip(tr("Sent as %1").arg(QLatin1String(key)));
+    choices_.append({key, box});
+    connect(box, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &EventEditor::updateEnabled);
     return box;
 }
 
 QWidget* EventEditor::table(const char* keyA, const char* keyB, const QString& headerA,
                             const QString& headerB, int maxRows, bool stringA, qint64 maxA,
-                            qint64 maxB, const Names& namesA) {
+                            qint64 maxB, double scaleB, const Names& namesA) {
     auto* t = new QTableWidget(0, 2);
     t->setHorizontalHeaderLabels({headerA, headerB});
     t->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     t->verticalHeader()->setDefaultSectionSize(24);
     t->setMinimumHeight(110);
     t->setMaximumHeight(170);
-    t->setToolTip(QStringLiteral("%1 / %2, up to %3 rows")
+    t->setToolTip(tr("Sent as %1 and %2, up to %3 rows")
                       .arg(QLatin1String(keyA), QLatin1String(keyB))
                       .arg(maxRows));
-    tables_.append({keyA, keyB, stringA, maxA, maxB, t});
+    tables_.append({keyA, keyB, stringA, maxA, maxB, scaleB, t});
     if (!namesA.isEmpty()) {
         t->setItemDelegateForColumn(0, new NamedIdDelegate(namesA, t));
     }
@@ -161,82 +191,159 @@ EventEditor::EventEditor(QWidget* parent) : QWidget(parent) {
     for (int i = 0; i < Catalog::raidEnemies().size(); ++i) {
         enemies.append({i, Catalog::raidEnemies()[i]});
     }
-    Names shop;
+    Names shopItems;
     for (const Catalog::NamedId& item : Catalog::shopItems()) {
-        shop.append({item.id, QString::fromLatin1(item.name)});
+        shopItems.append({item.id, QString::fromLatin1(item.name)});
     }
 
-    auto* subjugation = new QVBoxLayout;
-    subjugation->addWidget(table("subjugation_enemy_id", "subjugation_exp", tr("Enemy ID"),
-                                 tr("Bonus (tenths of %)"), 20, false, U8Max, I32Max, enemies));
+    // Kill bonus (subjugation).
+    auto* kills = new QVBoxLayout;
+    kills->addWidget(table("subjugation_enemy_id", "subjugation_exp", tr("Enemy"), tr("Bonus %"),
+                           20, false, U8Max, 5000, 10, enemies));
+    auto* killSection = section(
+        tr("Bonus EXP for killing enemies"),
+        tr("Each kill of a listed enemy gives extra EXP: +100 % doubles it, +500 % is the most. "
+           "Only the kill EXP "
+           "grows, so a cleared stage gains less than the number suggests. Enemy 0 is the Ooze."),
+        kills,
+        tr("Per kill: EXP x (100 + bonus) / 100, fractions dropped. Tested on Raid Stage 1: +500 % "
+           "on Oozes took a "
+           "clear from about 390 to 515 EXP and a failed 8-kill run from 75 to 386."));
 
-    auto* weekend = new QFormLayout;
-    weekend->addRow(tr("Type"), scalar("weekend_type", U8Max));
-    weekend->addRow(tr("Discount rate"), scalar("weekend_discount_rate", I32Max));
-    weekend->addRow(table("weekend_item_item_id", "weekend_item_price", tr("Item ID"), tr("Price"),
-                          5, false, U8Max, I32Max, shop));
+    // Special event: one kind at a time.
+    special_ = choice("special_event_id", {{-1, tr("Off")},
+                                           {1, tr("Bonus EXP on Chasm")},
+                                           {2, tr("Bonus EXP on Trench")},
+                                           {3, tr("Bonus EXP on Abyss")},
+                                           {8, tr("More Wanted enemies")},
+                                           {4, tr("Kind 4 (no known effect)")},
+                                           {5, tr("Kind 5 (no known effect)")},
+                                           {6, tr("Kind 6 (no known effect)")},
+                                           {7, tr("Kind 7 (no known effect)")},
+                                           {9, tr("Kind 9 (no known effect)")}});
+    specialExp_ = labelled(tr("EXP bonus"), number("special_exp_rate", 500, 10, tr("+"), tr(" %")));
+    specialWanted_ = labelled(tr("Extra Wanted chance"),
+                              number("special_wanted_rate", 100, 10, tr("+"), tr(" %")));
+    auto* specialFields = new QVBoxLayout;
+    specialFields->addWidget(labelled(tr("Kind"), special_));
+    specialFields->addWidget(specialExp_);
+    specialFields->addWidget(specialWanted_);
+    specialFields->addWidget(labelled(tr("Event number"), number("special_serial_id", I32Max, 1)));
+    auto* specialSection =
+        section(untested(tr("Special event")),
+                tr("Bonus EXP on one difficulty (+100 % doubles all the EXP from the results "
+                   "screen), or a higher chance of "
+                   "a Wanted enemy on each stage (+100 % means one every time)."),
+                specialFields,
+                tr("special_event_id 1-3: EXP x (100 + bonus) / 100 on Chasm, Trench or Abyss. 8: "
+                   "the bonus is added to the "
+                   "stage's own Wanted chance, capped at 100 %. The event number is kept by the "
+                   "game; leave it at 1."));
 
-    auto* participate = new QFormLayout;
-    participate->addRow(tr("Serial"), scalar("participate_serial_id", I32Max));
-    participate->addRow(tr("Event ID"), scalar("participate_event_id", U8Max));
+    // Raid shop sale (weekend).
+    shop_ = choice("weekend_type", {{-1, tr("Off")},
+                                    {1, tr("Weapons on sale")},
+                                    {3, tr("Item group X on sale")},
+                                    {5, tr("Item group Y on sale")},
+                                    {2, tr("Special prices, list A")},
+                                    {4, tr("Special prices, list B")}});
+    shopShare_ = labelled(tr("Players pay"), number("weekend_discount_rate", 100, 10, QString(),
+                                                    tr(" % of the price")));
+    shopItems_ = table("weekend_item_item_id", "weekend_item_price", tr("Item"), tr("Price"), 5,
+                       false, U8Max, I32Max, 1, shopItems);
+    auto* shopFields = new QVBoxLayout;
+    shopFields->addWidget(labelled(tr("Sale"), shop_));
+    shopFields->addWidget(shopShare_);
+    shopFields->addWidget(shopItems_);
+    auto* shopSection = section(untested(tr("Raid shop sale")),
+                                tr("Lower prices in the Raid shop: 50 % means half price, 0 % "
+                                   "free. The two lists set a price per item instead."),
+                                shopFields,
+                                tr("weekend_type 1 = weapons (0x8005 codes), 3 = group X, items "
+                                   "0x8008 (except 0x1a), 5 = group Y, items 0x8007. "
+                                   "Price x share / 100."));
 
-    auto* special = new QFormLayout;
-    special->addRow(tr("Serial"), scalar("special_serial_id", I32Max));
-    special->addRow(tr("Event ID"), scalar("special_event_id", U8Max));
-    special->addRow(tr("EXP rate"), scalar("special_exp_rate", I32Max));
-    special->addRow(tr("Wanted rate"), scalar("special_wanted_rate", I32Max));
+    // Extra discount (discount event).
+    discount_ = choice("discount_event_id",
+                       {{-1, tr("Off")}, {1, tr("Item group A")}, {2, tr("Item group B")}});
+    discountShare_ = labelled(
+        tr("Players pay"), number("discount_exp_rate", 100, 10, QString(), tr(" % of the price")));
+    auto* discountFields = new QVBoxLayout;
+    discountFields->addWidget(labelled(tr("Items"), discount_));
+    discountFields->addWidget(discountShare_);
+    auto* discountSection =
+        section(untested(tr("Extra item discount")),
+                tr("A second price cut for one more group of shop items. The game calls this an "
+                   "EXP rate, but it changes prices."),
+                discountFields,
+                tr("discount_event_id 1 = items 0x800810xx-0x800814xx, 2 = items 0x800815xx."));
 
-    auto* discount = new QFormLayout;
-    discount->addRow(tr("Event ID"), scalar("discount_event_id", U8Max));
-    discount->addRow(tr("EXP rate"), scalar("discount_exp_rate", I32Max));
+    // Wanted names (collaboration).
+    auto* names = new QVBoxLayout;
+    names->addWidget(table("collaboration_wanted_name", "collaboration_wanted_serial_id",
+                           tr("Name"), tr("Number"), 10, true, 15, I32Max, 1));
+    auto* namesSection =
+        section(untested(tr("Wanted enemy names")),
+                tr("Names shown on Wanted enemies (up to 15 plain letters or digits each). To be "
+                   "sure a Wanted enemy appears, "
+                   "also set the special event to \"More Wanted enemies\". Leave the number at 1."),
+                names);
 
-    auto* collaboration = new QVBoxLayout;
-    collaboration->addWidget(table("collaboration_wanted_name", "collaboration_wanted_serial_id",
-                                   tr("Name"), tr("Serial"), 10, true, 15, I32Max));
+    // Participation event: effect not found yet.
+    auto* other = new QVBoxLayout;
+    other->addWidget(
+        labelled(tr("Participation kind"), choice("participate_event_id", {{-1, tr("Off")},
+                                                                           {1, tr("1")},
+                                                                           {2, tr("2")},
+                                                                           {3, tr("3")},
+                                                                           {4, tr("4")},
+                                                                           {5, tr("5")}})));
+    other->addWidget(
+        labelled(tr("Participation number"), number("participate_serial_id", I32Max, 1)));
+    auto* otherSection = section(
+        tr("Other (effect unknown)"),
+        tr("The game accepts these but what they do is not known yet. Leave them off."), other);
 
     auto* grid = new QGridLayout(this);
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->addWidget(group(tr("Subjugation"), subjugation,
-                          tr("Bonus on the kill EXP of these enemies: each kill gives EXP x (100 + "
-                             "bonus / 10) / 100, fractions "
-                             "dropped, at most +500 % (5000); 1000 doubles it. The results screen "
-                             "adds the kills to accuracy, "
-                             "clear time and damage, so a clear gains much less than the bonus "
-                             "(Stage 1: +500 % on Oozes took a "
-                             "clear from about 390 to 515 EXP); a run that ends early gains almost "
-                             "all of it. IDs 0-19 are the "
-                             "enemy models shown; 0 is confirmed as the Ooze.")),
-                    0, 0, 3, 1);
-    grid->addWidget(group(tr("Weekend shop"), weekend,
-                          tr("Type 1-5, anything else is ignored. Types 1, 3 and 5 use the "
-                             "discount rate (tenths), "
-                             "types 2 and 4 the item list. Items are named from the Raid shop "
-                             "list; untested in game.")),
-                    0, 1, 3, 1);
-    grid->addWidget(group(tr("Participation event"), participate,
-                          tr("Event ID 1-5, kept with its serial. Effect not known yet.")),
-                    0, 2);
-    grid->addWidget(group(tr("Special event"), special,
-                          tr("Event ID 1-9: 1-3 use the EXP rate, 8 the Wanted rate, 9 both, 4-7 "
-                             "neither. Rates in "
-                             "tenths: 20 means x2. Untested in game.")),
-                    1, 2);
-    grid->addWidget(group(tr("Discount event"), discount,
-                          tr("Event ID 1 or 2, with an EXP rate in tenths. Untested in game.")),
-                    2, 2);
-    grid->addWidget(
-        group(tr("Collaboration wanted"), collaboration,
-              tr("Names for Wanted enemies: ASCII, at most 15 characters. Untested in game.")),
-        3, 0, 1, 3);
-    grid->setRowStretch(4, 1);
+    grid->addWidget(killSection, 0, 0);
+    grid->addWidget(specialSection, 0, 1);
+    grid->addWidget(shopSection, 1, 0);
+    grid->addWidget(discountSection, 1, 1);
+    grid->addWidget(namesSection, 2, 0);
+    grid->addWidget(otherSection, 2, 1);
+    grid->setRowStretch(3, 1);
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
-    grid->setColumnStretch(2, 1);
+    updateEnabled();
+}
+
+void EventEditor::updateEnabled() {
+    if (!special_ || !shop_ || !discount_) {
+        return; // still being built
+    }
+    const int kind = special_->currentData().toInt();
+    specialExp_->setEnabled(kind >= 1 && kind <= 3);
+    specialWanted_->setEnabled(kind == 8);
+    const int sale = shop_->currentData().toInt();
+    shopShare_->setEnabled(sale == 1 || sale == 3 || sale == 5);
+    shopItems_->setEnabled(sale == 2 || sale == 4);
+    discountShare_->setEnabled(discount_->currentData().toInt() > 0);
 }
 
 void EventEditor::setEvent(const QJsonObject& event) {
-    for (const Scalar& s : scalars_) {
-        s.box->setValue(event.contains(s.key) ? int(event.value(s.key).toInteger()) : -1);
+    for (const Number& n : numbers_) {
+        n.box->setValue(event.contains(n.key) ? event.value(n.key).toDouble() / n.scale : -1);
+    }
+    for (const Choice& c : choices_) {
+        const int value = event.contains(c.key) ? int(event.value(c.key).toInteger()) : -1;
+        int index = c.box->findData(value);
+        if (index < 0) {
+            // A value the list does not name: keep it, so saving does not change it.
+            c.box->addItem(tr("Value %1 (unknown)").arg(value), value);
+            index = c.box->count() - 1;
+        }
+        c.box->setCurrentIndex(index);
     }
     for (const Table& t : tables_) {
         const QJsonArray a = event.value(t.keyA).toArray();
@@ -251,21 +358,33 @@ void EventEditor::setEvent(const QJsonObject& event) {
                              new QTableWidgetItem(va.isString()   ? va.toString()
                                                   : va.isDouble() ? QString::number(va.toInteger())
                                                                   : QString()));
-            t.table->setItem(
-                r, 1,
-                new QTableWidgetItem(vb.isDouble() ? QString::number(vb.toInteger()) : QString()));
+            t.table->setItem(r, 1,
+                             new QTableWidgetItem(vb.isDouble()
+                                                      ? QString::number(vb.toDouble() / t.scaleB)
+                                                      : QString()));
         }
     }
+    updateEnabled();
 }
 
 std::optional<QJsonObject> EventEditor::event(QString* error) const {
     QJsonObject out;
-    for (const Scalar& s : scalars_) {
-        if (s.box->value() >= 0) {
-            out.insert(s.key, s.box->value());
+    for (const Number& n : numbers_) {
+        // A field that does not apply to the chosen kind is left out.
+        if (n.box->value() >= 0 && n.box->parentWidget() && n.box->parentWidget()->isEnabled()) {
+            out.insert(n.key, qint64(std::llround(n.box->value() * n.scale)));
+        }
+    }
+    for (const Choice& c : choices_) {
+        const int value = c.box->currentData().toInt();
+        if (value >= 0) {
+            out.insert(c.key, value);
         }
     }
     for (const Table& t : tables_) {
+        if (!t.table->isEnabled()) {
+            continue;
+        }
         QJsonArray a;
         QJsonArray b;
         for (int r = 0; r < t.table->rowCount(); ++r) {
@@ -277,7 +396,7 @@ std::optional<QJsonObject> EventEditor::event(QString* error) const {
                 continue;
             }
             const QString where =
-                QStringLiteral("%1 row %2: ").arg(QLatin1String(t.keyA)).arg(r + 1);
+                tr("%1, row %2: ").arg(t.table->horizontalHeaderItem(0)->text()).arg(r + 1);
             if (t.stringA) {
                 if (ta.isEmpty() || ta.size() > t.maxA) {
                     *error = where + tr("the name must be 1 to %1 characters").arg(t.maxA);
@@ -288,15 +407,19 @@ std::optional<QJsonObject> EventEditor::event(QString* error) const {
                 bool ok = false;
                 const qint64 v = ta.toLongLong(&ok);
                 if (!ok || v < 0 || v > t.maxA) {
-                    *error = where + tr("the first column must be a number 0..%1").arg(t.maxA);
+                    *error =
+                        where + tr("pick an entry from the list (or a number 0 to %1)").arg(t.maxA);
                     return std::nullopt;
                 }
                 a.append(v);
             }
             bool ok = false;
-            const qint64 v = tb.toLongLong(&ok);
+            const double shown = tb.toDouble(&ok);
+            const qint64 v = std::llround(shown * t.scaleB);
             if (!ok || v < 0 || v > t.maxB) {
-                *error = where + tr("the second column must be a number 0..%1").arg(t.maxB);
+                *error = where + tr("the %1 must be a number from 0 to %2")
+                                     .arg(t.table->horizontalHeaderItem(1)->text().toLower())
+                                     .arg(double(t.maxB) / t.scaleB);
                 return std::nullopt;
             }
             b.append(v);

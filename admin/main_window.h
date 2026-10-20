@@ -30,6 +30,11 @@ private:
     QWidget* buildRewardsTab();
     QWidget* buildEventTab();
     QWidget* buildLeaderboardTab();
+    QWidget* buildScheduleTab();
+    void showSchedule(const QJsonObject& reply);
+    void editScheduleEntry(bool add);
+    void deleteScheduleEntry();
+    void saveSchedule(const QJsonArray& entries, const QString& done);
     void showLeaderboards(const QJsonObject& boards);
     void showStageBoard();
     void displayEvent(const QJsonObject& reply);
@@ -58,6 +63,7 @@ private:
     QJsonArray players_;
     QJsonArray rewards_;
     QJsonObject boards_;
+    QJsonArray adminSchedule_;
 
     QLineEdit* url_;
     QLineEdit* key_;
@@ -74,6 +80,12 @@ private:
     QPushButton* addReward_;
     QPushButton* refresh_;
     EventEditor* eventEditor_;
+    QTableWidget* scheduleTable_;
+    QLabel* scheduleNote_;
+    QPushButton* addEntry_;
+    QPushButton* editEntry_;
+    QPushButton* deleteEntry_;
+    QComboBox* eventPreset_;
     QTableWidget* playerBoard_;
     QComboBox* stagePicker_;
     QTableWidget* stageBoard_;

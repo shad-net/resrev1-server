@@ -8,40 +8,58 @@
 
 #include <optional>
 
-class QSpinBox;
+class QComboBox;
+class QDoubleSpinBox;
 class QTableWidget;
+class QWidget;
 
-// Form for the regev event. Every field is optional: a "not set" number or an empty table
-// leaves its key out, and an event with no keys means no event is running.
 class EventEditor : public QWidget {
     Q_OBJECT
 public:
     explicit EventEditor(QWidget* parent = nullptr);
 
     void setEvent(const QJsonObject& event);
-    // The event as JSON, or nullopt with `error` set when a table cell is not valid.
     std::optional<QJsonObject> event(QString* error) const;
 
 private:
-    struct Scalar {
+    struct Number {
         const char* key;
-        QSpinBox* box;
+        QDoubleSpinBox* box;
+        double scale;
+    };
+    struct Choice {
+        const char* key;
+        QComboBox* box;
     };
     struct Table {
         const char* keyA;
         const char* keyB;
         bool stringA; // first column holds names instead of numbers
         qint64 maxA;
-        qint64 maxB;
+        qint64 maxB; // in JSON units
+        double scaleB;
         QTableWidget* table;
     };
-
     using Names = QVector<QPair<int, QString>>;
 
-    QSpinBox* scalar(const char* key, qint64 max);
-    QWidget* table(const char* keyA, const char* keyB, const QString& headerA, const QString& headerB,
-                   int maxRows, bool stringA, qint64 maxA, qint64 maxB, const Names& namesA = {});
+    QDoubleSpinBox* number(const char* key, double max, double scale, const QString& prefix = {},
+                           const QString& suffix = {}, int decimals = 0);
+    QComboBox* choice(const char* key, const Names& items);
+    QWidget* table(const char* keyA, const char* keyB, const QString& headerA,
+                   const QString& headerB, int maxRows, bool stringA, qint64 maxA, qint64 maxB,
+                   double scaleB, const Names& namesA = {});
+    void updateEnabled();
 
-    QVector<Scalar> scalars_;
+    QVector<Number> numbers_;
+    QVector<Choice> choices_;
     QVector<Table> tables_;
+
+    QComboBox* special_ = nullptr;
+    QWidget* specialExp_ = nullptr;
+    QWidget* specialWanted_ = nullptr;
+    QComboBox* shop_ = nullptr;
+    QWidget* shopShare_ = nullptr;
+    QWidget* shopItems_ = nullptr;
+    QComboBox* discount_ = nullptr;
+    QWidget* discountShare_ = nullptr;
 };

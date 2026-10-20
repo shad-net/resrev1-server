@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Resident Evil Revelations Custom Server Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+
 #pragma once
 
 #include "config.h"
@@ -35,9 +36,23 @@ public:
     const std::optional<QByteArray>& eventOverride() const {
         return eventOverride_;
     }
-    const QByteArray& eventJson() const {
-        return eventOverride_ ? *eventOverride_ : config_.eventJson;
+    void setAdminSchedule(QVector<ScheduledEvent> schedule);
+    const QVector<ScheduledEvent>& adminSchedule() const {
+        return adminSchedule_;
     }
+    const QVector<ScheduledEvent>& schedule() const {
+        return schedule_;
+    }
+    struct CurrentEvent {
+        QByteArray json;
+        QString source;                    // "admin", "schedule" or "config"
+        std::optional<EventWindow> window; // set for "schedule"
+    };
+    CurrentEvent currentEvent() const;
+    QByteArray eventJson() const {
+        return currentEvent().json;
+    }
+    QJsonObject eventInfo(int upcoming) const;
     void handle(const HttpRequest& request, HttpServer::Responder respond);
 
 private:
@@ -62,6 +77,9 @@ private:
     QVector<Reward> stored_;
     QVector<Reward> merged_;
     std::optional<QByteArray> eventOverride_;
+    QVector<ScheduledEvent> adminSchedule_;
+    QVector<ScheduledEvent> schedule_;
+    mutable QString lastEventKey_;
     std::unique_ptr<Blowfish> cipher_;
     ShadNetVerifier verifier_;
     QJsonObject boards_;

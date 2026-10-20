@@ -105,7 +105,6 @@ bool parseRewards(const QJsonValue& value, QVector<Reward>* out, QString* error)
     if (!value.isArray()) {
         return fail(error, QStringLiteral("\"rewards\" must be an array"));
     }
-    QSet<qint64> serials;
     const QJsonArray array = value.toArray();
     for (qsizetype i = 0; i < array.size(); ++i) {
         const QString where = QStringLiteral("rewards[%1]").arg(i);
@@ -116,11 +115,21 @@ bool parseRewards(const QJsonValue& value, QVector<Reward>* out, QString* error)
         if (!parseReward(array[i].toObject(), where, &reward, error)) {
             return false;
         }
-        if (serials.contains(reward.serial)) {
-            return fail(error,
-                        where + QStringLiteral(".serial %1 is used twice").arg(reward.serial));
+        for (qsizetype j = 0; j < out->size(); ++j) {
+            const Reward& other = out->at(j);
+            if (reward.overlaps(other)) {
+                return fail(
+                    error,
+                    other.serial == reward.serial
+                        ? where + QStringLiteral(".serial %1 is used twice").arg(reward.serial)
+                        : where + QStringLiteral(
+                                      ".serial %1 overlaps rewards[%2] (a weekly reward uses "
+                                      "its serial and the next %3)")
+                                      .arg(reward.serial)
+                                      .arg(j)
+                                      .arg(Reward::WeeklySerials - 1));
+            }
         }
-        serials.insert(reward.serial);
         out->append(reward);
     }
     return true;
@@ -220,6 +229,19 @@ bool parseReward(const QJsonObject& obj, const QString& where, Reward* out, QStr
     if (!readInt(obj.value("serial"), 1, I32Max, &reward.serial)) {
         return fail(error, where + QStringLiteral(".serial must be an integer 1..2147483647"));
     }
+    if (hasTimeWindow(obj)) {
+        TimeWindow window;
+        if (!parseTimeWindow(obj, where, &window, error)) {
+            return false;
+        }
+        reward.window = window;
+        if (window.weekly && reward.serial > I32Max - Reward::WeeklySerials + 1) {
+            return fail(
+                error, where + QStringLiteral(
+                                   ".serial is too high for a weekly reward, which uses %1 serials")
+                                   .arg(Reward::WeeklySerials));
+        }
+    }
 
     const QJsonValue typeValue = obj.value("type");
     const RewardType* type = nullptr;
@@ -235,7 +257,9 @@ bool parseReward(const QJsonObject& obj, const QString& where, Reward* out, QStr
     }
     reward.type = type->id;
 
-    QSet<QString> allowed = {QStringLiteral("serial"), QStringLiteral("type")};
+    QSet<QString> allowed = {QStringLiteral("serial"),   QStringLiteral("type"),
+                             QStringLiteral("timezone"), QStringLiteral("start"),
+                             QStringLiteral("end"),      QStringLiteral("weekly")};
     for (const FieldSpec& field : type->fields) {
         qint64 v = 0;
         if (!readInt(obj.value(field.name), 0, field.max, &v)) {
@@ -301,6 +325,12 @@ QJsonObject rewardToJson(const Reward& reward) {
     }
     if (!reward.players.isEmpty()) {
         obj.insert(QStringLiteral("players"), QJsonArray::fromStringList(reward.players));
+    }
+    if (reward.window) {
+        const QJsonObject window = timeWindowToJson(*reward.window);
+        for (auto it = window.begin(); it != window.end(); ++it) {
+            obj.insert(it.key(), it.value());
+        }
     }
     return obj;
 }
@@ -414,7 +444,8 @@ std::optional<ServerConfig> loadConfig(const QByteArray& json, QString* error) {
         return std::nullopt;
     }
     if (!parseRewards(root.value("rewards"), &config.rewards, error) ||
-        !parseEvent(root.value("event"), &config.eventJson, error)) {
+        !parseEvent(root.value("event"), &config.eventJson, error) ||
+        !parseEventSchedule(root.value("event_schedule"), &config.eventSchedule, error)) {
         return std::nullopt;
     }
     return config;

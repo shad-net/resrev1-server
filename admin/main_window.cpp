@@ -4,8 +4,10 @@
 #include "main_window.h"
 
 #include "event_editor.h"
+#include "event_presets.h"
 #include "reward_catalog.h"
 #include "reward_dialog.h"
+#include "schedule_dialog.h"
 #include "stats_dialog.h"
 
 #include <QComboBox>
@@ -16,6 +18,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
@@ -50,9 +53,21 @@ QString duration(qint64 seconds) {
 }
 
 QString rankName(qint64 rank) {
-    return rank == 1   ? QStringLiteral("A")
-           : rank == 2 ? QStringLiteral("B?")
-                       : QString::number(rank);
+    // 0 = S and 1 = A are confirmed in game; 2 and 3 follow the order (B, C).
+    switch (rank) {
+    case 0:
+        return QStringLiteral("S");
+    case 1:
+        return QStringLiteral("A");
+    case 2:
+        return QStringLiteral("B");
+    case 3:
+        return QStringLiteral("C");
+    case 4:
+        return QStringLiteral("-");
+    default:
+        return QString::number(rank);
+    }
 }
 
 QTableWidget* makeTable(const QStringList& headers) {
@@ -90,6 +105,7 @@ int selectedIndex(const QTableWidget* table) {
     return table->item(rows.first().row(), 0)->data(Qt::UserRole).toInt();
 }
 
+// What `players` entries are matched against: the player's shadNet online ID.
 QString playerTarget(const QJsonObject& p) {
     return p.value("online_id").toString();
 }
@@ -130,6 +146,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_->addTab(buildPlayersTab(), tr("Players"));
     tabs_->addTab(buildRewardsTab(), tr("Rewards"));
     tabs_->addTab(buildEventTab(), tr("Event"));
+    tabs_->addTab(buildScheduleTab(), tr("Schedule"));
     tabs_->addTab(buildLeaderboardTab(), tr("Leaderboards"));
 
     auto* central = new QWidget;
@@ -188,8 +205,8 @@ QWidget* MainWindow::buildPlayersTab() {
 }
 
 QWidget* MainWindow::buildRewardsTab() {
-    rewardTable_ =
-        makeTable({tr("Serial"), tr("Type"), tr("Item"), tr("For"), tr("Source"), tr("Claims")});
+    rewardTable_ = makeTable({tr("Serial"), tr("Type"), tr("Item"), tr("For"), tr("Available"),
+                              tr("Source"), tr("Claims")});
     rewardTable_->sortByColumn(0, Qt::AscendingOrder);
     addReward_ = new QPushButton(tr("Add reward..."));
     deleteReward_ = new QPushButton(tr("Delete"));
@@ -310,6 +327,154 @@ void MainWindow::showStageBoard() {
     stageBoard_->resizeColumnsToContents();
 }
 
+QWidget* MainWindow::buildScheduleTab() {
+    scheduleTable_ = makeTable({tr("Name"), tr("When"), tr("Effects"), tr("Status"), tr("Source")});
+    scheduleTable_->setSortingEnabled(false);
+    scheduleNote_ = new QLabel;
+    scheduleNote_->setWordWrap(true);
+    addEntry_ = new QPushButton(tr("Add..."));
+    editEntry_ = new QPushButton(tr("Edit..."));
+    deleteEntry_ = new QPushButton(tr("Delete"));
+    editEntry_->setToolTip(tr("Entries from config.json are changed by editing the file"));
+
+    auto* buttons = new QHBoxLayout;
+    buttons->addWidget(addEntry_);
+    buttons->addWidget(editEntry_);
+    buttons->addWidget(deleteEntry_);
+    buttons->addStretch();
+
+    auto* w = new QWidget;
+    auto* layout = new QVBoxLayout(w);
+    layout->addWidget(scheduleNote_);
+    layout->addWidget(scheduleTable_);
+    layout->addLayout(buttons);
+
+    const auto selectedAdmin = [this] {
+        const int row = scheduleTable_->currentRow();
+        return row >= 0 && row < adminSchedule_.size() &&
+               !scheduleTable_->selectedItems().isEmpty();
+    };
+    const auto update = [this, selectedAdmin] {
+        const bool online = api_.configured() && !server_->text().isEmpty();
+        addEntry_->setEnabled(online);
+        editEntry_->setEnabled(online && selectedAdmin());
+        deleteEntry_->setEnabled(online && selectedAdmin());
+    };
+    connect(scheduleTable_, &QTableWidget::itemSelectionChanged, this, update);
+    connect(addEntry_, &QPushButton::clicked, this, [this] { editScheduleEntry(true); });
+    connect(editEntry_, &QPushButton::clicked, this, [this] { editScheduleEntry(false); });
+    connect(deleteEntry_, &QPushButton::clicked, this, &MainWindow::deleteScheduleEntry);
+    connect(scheduleTable_, &QTableWidget::cellDoubleClicked, this,
+            [this, selectedAdmin](int, int) {
+                if (selectedAdmin()) {
+                    editScheduleEntry(false);
+                }
+            });
+    update();
+    return w;
+}
+
+void MainWindow::showSchedule(const QJsonObject& reply) {
+    adminSchedule_ = QJsonArray();
+    for (const QJsonValue& v : reply.value("admin").toArray()) {
+        QJsonObject e = v.toObject();
+        // Keep only what the server reads, so a save sends the entries back unchanged.
+        for (const char* key : {"when", "effects", "open_until", "next_start"}) {
+            e.remove(QLatin1String(key));
+        }
+        adminSchedule_.append(e);
+    }
+    QVector<QPair<QJsonObject, bool>> rows; // entry, from the admin API
+    for (const QJsonValue& v : reply.value("admin").toArray()) {
+        rows.append({v.toObject(), true});
+    }
+    for (const QJsonValue& v : reply.value("config").toArray()) {
+        rows.append({v.toObject(), false});
+    }
+    const QString running = reply.value("running").toObject().value("name").toString();
+    bool runningShown = false;
+    scheduleTable_->clearContents();
+    scheduleTable_->setRowCount(int(rows.size()));
+    for (int i = 0; i < rows.size(); ++i) {
+        const QJsonObject e = rows[i].first;
+        QStringList effects;
+        for (const QJsonValue& x : e.value("effects").toArray()) {
+            effects << x.toString();
+        }
+        QString status = tr("over");
+        if (e.contains("open_until")) {
+            // Only the first open entry is sent; a later one waits behind it.
+            const bool sent = !runningShown && e.value("name").toString() == running;
+            runningShown = runningShown || sent;
+            status = sent ? tr("running until %1").arg(when(e.value("open_until").toInteger()))
+                          : tr("open, but an earlier entry runs instead");
+        } else if (e.contains("next_start")) {
+            status = tr("next %1").arg(when(e.value("next_start").toInteger()));
+        }
+        scheduleTable_->setItem(i, 0, cell(e.value("name").toString(), i));
+        scheduleTable_->setItem(i, 1, cell(e.value("when").toString(), i));
+        scheduleTable_->setItem(i, 2, cell(effects.join(QStringLiteral("; ")), i));
+        scheduleTable_->setItem(i, 3, cell(status, i));
+        scheduleTable_->setItem(i, 4, cell(rows[i].second ? tr("admin") : tr("config.json"), i));
+    }
+    scheduleTable_->resizeColumnsToContents();
+    QString note = tr(
+        "The server sends the first entry whose time window is open: entries added here first, "
+        "then config.json's event_schedule. With none open, the \"event\" in config.json is sent.");
+    if (reply.value("overridden").toBool()) {
+        note += ' ' + tr("Right now the event set on the Event tab replaces all of them.");
+    }
+    scheduleNote_->setText(note);
+    emit scheduleTable_->itemSelectionChanged();
+}
+
+void MainWindow::editScheduleEntry(bool add) {
+    const int row = scheduleTable_->currentRow();
+    if (!add && (row < 0 || row >= adminSchedule_.size())) {
+        return;
+    }
+    ScheduleDialog dialog(add ? QJsonObject() : adminSchedule_[row].toObject(), this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    QJsonArray entries = adminSchedule_;
+    if (add) {
+        entries.append(dialog.entry());
+    } else {
+        entries[row] = dialog.entry();
+    }
+    saveSchedule(entries, add ? tr("Scheduled event added") : tr("Scheduled event saved"));
+}
+
+void MainWindow::deleteScheduleEntry() {
+    const int row = scheduleTable_->currentRow();
+    if (row < 0 || row >= adminSchedule_.size()) {
+        return;
+    }
+    const QString name = adminSchedule_[row].toObject().value("name").toString();
+    if (QMessageBox::question(this, tr("Delete scheduled event"),
+                              tr("Delete \"%1\" from the schedule?").arg(name)) !=
+        QMessageBox::Yes) {
+        return;
+    }
+    QJsonArray entries = adminSchedule_;
+    entries.removeAt(row);
+    saveSchedule(entries, tr("Scheduled event deleted"));
+}
+
+void MainWindow::saveSchedule(const QJsonArray& entries, const QString& done) {
+    api_.put(QStringLiteral("/api/schedule"), QJsonDocument(entries),
+             [this, done](const ApiClient::Reply& r) {
+                 if (!r.ok()) {
+                     reportError(tr("Save schedule"), r);
+                     return;
+                 }
+                 showSchedule(r.json().object());
+                 setStatus(done);
+                 refresh(); // the Event tab shows what is sent now
+             });
+}
+
 QWidget* MainWindow::buildEventTab() {
     eventEditor_ = new EventEditor;
     eventSource_ = new QLabel;
@@ -317,9 +482,9 @@ QWidget* MainWindow::buildEventTab() {
     applyEvent_ = new QPushButton(tr("Apply event"));
     applyEvent_->setToolTip(
         tr("Send this event to the server; the game picks it up on its next event check"));
-    clearEvent_ = new QPushButton(tr("Use config.json event"));
+    clearEvent_ = new QPushButton(tr("Back to schedule / config.json"));
     clearEvent_->setToolTip(
-        tr("Drop the event set here and go back to the \"event\" in config.json"));
+        tr("Drop the event set here: the schedule and the \"event\" in config.json apply again"));
     revertEvent_ = new QPushButton(tr("Revert"));
     revertEvent_->setToolTip(tr("Discard edits and show the event the server is sending"));
 
@@ -328,17 +493,33 @@ QWidget* MainWindow::buildEventTab() {
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidget(eventEditor_);
 
+    eventPreset_ = new QComboBox;
+    eventPreset_->addItem(tr("Fill from a preset..."));
+    for (const Presets::Preset& p : Presets::events()) {
+        eventPreset_->addItem(Presets::label(p));
+    }
+    eventPreset_->setToolTip(tr("Fills the form; nothing is sent until you press Apply event"));
+
     auto* buttons = new QHBoxLayout;
     buttons->addWidget(applyEvent_);
     buttons->addWidget(revertEvent_);
     buttons->addWidget(clearEvent_);
     buttons->addStretch();
+    buttons->addWidget(eventPreset_);
 
     auto* w = new QWidget;
     auto* layout = new QVBoxLayout(w);
     layout->addWidget(eventSource_);
     layout->addWidget(scroll);
     layout->addLayout(buttons);
+
+    connect(eventPreset_, qOverload<int>(&QComboBox::activated), this, [this](int index) {
+        if (index > 0) {
+            eventEditor_->setEvent(Presets::events()[index - 1].event);
+            setStatus(tr("Preset loaded into the form; press Apply event to send it"));
+        }
+        eventPreset_->setCurrentIndex(0);
+    });
 
     connect(applyEvent_, &QPushButton::clicked, this, &MainWindow::applyEvent);
     connect(clearEvent_, &QPushButton::clicked, this, &MainWindow::clearEvent);
@@ -350,12 +531,41 @@ void MainWindow::displayEvent(const QJsonObject& reply) {
     eventReply_ = reply;
     const QJsonObject event = reply.value("event").toObject();
     eventEditor_->setEvent(event);
-    const bool admin = reply.value("source").toString() == QLatin1String("admin");
-    QString text = admin ? tr("Sending the event set here (it replaces the event in config.json).")
-                         : tr("Sending the event from config.json. Applying an event here replaces "
-                              "it until you go back.");
+    const QString source = reply.value("source").toString();
+    const bool admin = source == QLatin1String("admin");
+    const QJsonObject info = reply.value("info").toObject();
+    const QJsonObject current = info.value("current").toObject();
+    QString text;
+    if (admin) {
+        text = tr(
+            "Sending the event set here (it replaces the schedule and the event in config.json).");
+    } else if (source == QLatin1String("schedule")) {
+        text = tr("Sending the scheduled event \"%1\" until %2. Applying an event here replaces it "
+                  "until you go back.")
+                   .arg(current.value("name").toString(), when(current.value("end").toInteger()));
+    } else {
+        text = tr("Sending the event from config.json. Applying an event here replaces it until "
+                  "you go back.");
+    }
     if (event.isEmpty()) {
         text += ' ' + tr("The event is empty, so no event is running.");
+    }
+    QStringList effects;
+    for (const QJsonValue& v : current.value("description").toArray()) {
+        effects << v.toString();
+    }
+    if (!effects.isEmpty()) {
+        text += ' ' + tr("Players see: %1.").arg(effects.join(QStringLiteral("; ")));
+    }
+    QStringList next;
+    for (const QJsonValue& v : info.value("upcoming").toArray()) {
+        const QJsonObject o = v.toObject();
+        next << tr("%1 (%2 to %3)")
+                    .arg(o.value("name").toString(), when(o.value("start").toInteger()),
+                         when(o.value("end").toInteger()));
+    }
+    if (!next.isEmpty()) {
+        text += '\n' + tr("Scheduled next: %1").arg(next.join(QStringLiteral(", ")));
     }
     eventSource_->setText(text);
     clearEvent_->setEnabled(admin);
@@ -457,6 +667,13 @@ void MainWindow::refresh() {
                 } else {
                     reportError(tr("Load event"), r3);
                 }
+                api_.get(QStringLiteral("/api/schedule"), [this](const ApiClient::Reply& r5) {
+                    if (r5.ok()) {
+                        showSchedule(r5.json().object());
+                    } else {
+                        reportError(tr("Load schedule"), r5);
+                    }
+                });
                 api_.get(QStringLiteral("/api/leaderboards"), [this](const ApiClient::Reply& r4) {
                     if (r4.ok()) {
                         showLeaderboards(r4.json().object());
@@ -521,8 +738,23 @@ void MainWindow::showRewards(const QJsonArray& rewards) {
         rewardTable_->setItem(i, 2, cell(Catalog::describe(r), i));
         rewardTable_->setItem(i, 3,
                               cell(players.isEmpty() ? tr("everyone") : players.join(", "), i));
-        rewardTable_->setItem(i, 4, cell(source, i));
-        rewardTable_->setItem(i, 5, numberCell(r.value("claims").toInteger(), i));
+        QString available = tr("always");
+        if (r.contains("available")) {
+            available = r.value("available").toString();
+            if (r.value("active").toBool()) {
+                available += r.contains("current_serial")
+                                 ? tr("  [open, sending serial %1]")
+                                       .arg(r.value("current_serial").toInteger())
+                                 : tr("  [open]");
+            } else if (r.contains("next_start")) {
+                available += tr("  [opens %1]").arg(when(r.value("next_start").toInteger()));
+            } else {
+                available += tr("  [over]");
+            }
+        }
+        rewardTable_->setItem(i, 4, cell(available, i));
+        rewardTable_->setItem(i, 5, cell(source, i));
+        rewardTable_->setItem(i, 6, numberCell(r.value("claims").toInteger(), i));
     }
     rewardTable_->setSortingEnabled(true);
     rewardTable_->resizeColumnsToContents();

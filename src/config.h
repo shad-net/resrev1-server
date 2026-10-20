@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "event_schedule.h"
+
 #include <QByteArray>
 #include <QHostAddress>
 #include <QJsonObject>
@@ -18,6 +20,24 @@ struct Reward {
     QVector<QPair<QString, qint64>> fields;
     std::optional<bool> weaponRandomTag;
     QStringList players;
+    std::optional<TimeWindow> window;
+    static constexpr qint64 WeeklySerials = 1000;
+    qint64 lastSerial() const {
+        return window && window->weekly ? serial + WeeklySerials - 1 : serial;
+    }
+    bool overlaps(const Reward& other) const {
+        return serial <= other.lastSerial() && other.serial <= lastSerial();
+    }
+    std::optional<qint64> serialAt(const QDateTime& now) const {
+        if (!window) {
+            return serial;
+        }
+        const auto occurrence = occurrenceAt(*window, now);
+        if (!occurrence) {
+            return std::nullopt;
+        }
+        return window->weekly ? serial + weekNumber(*window, *occurrence) : serial;
+    }
 
     bool offeredTo(const QString& onlineId) const {
         return players.isEmpty() || (!onlineId.isEmpty() && players.contains(onlineId.toLower()));
@@ -40,6 +60,7 @@ struct ServerConfig {
     int leaderboardSize = 10;
     QVector<Reward> rewards;
     QByteArray eventJson = QByteArrayLiteral("{}");
+    QVector<ScheduledEvent> eventSchedule;
 };
 
 std::optional<ServerConfig> loadConfig(const QByteArray& json, QString* error);

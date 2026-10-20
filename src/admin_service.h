@@ -31,6 +31,8 @@ private:
     HttpResponse setEvent(const QByteArray& body);
     HttpResponse clearEvent();
     HttpResponse leaderboards(const QString& size);
+    HttpResponse schedule();
+    HttpResponse setSchedule(const QByteArray& body);
 
     Storage* storage_;
     RevelationsService* service_;

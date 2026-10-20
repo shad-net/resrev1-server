@@ -48,6 +48,7 @@ void RevelationsService::setConfig(ServerConfig config) {
     cipher_ = std::make_unique<Blowfish>(config_.key);
     verifier_.setEndpoint(config_.shadnetUrl);
     mergeRewards();
+    schedule_ = adminSchedule_ + config_.eventSchedule;
 }
 
 void RevelationsService::setStoredRewards(QVector<Reward> rewards) {
@@ -55,16 +56,19 @@ void RevelationsService::setStoredRewards(QVector<Reward> rewards) {
     mergeRewards();
 }
 
+void RevelationsService::setAdminSchedule(QVector<ScheduledEvent> schedule) {
+    adminSchedule_ = std::move(schedule);
+    schedule_ = adminSchedule_ + config_.eventSchedule;
+}
+
 void RevelationsService::mergeRewards() {
     merged_ = config_.rewards;
-    QSet<qint64> serials;
-    for (const Reward& r : config_.rewards) {
-        serials.insert(r.serial);
-    }
     for (const Reward& r : stored_) {
-        if (serials.contains(r.serial)) {
+        const bool hidden = std::any_of(config_.rewards.begin(), config_.rewards.end(),
+                                        [&r](const Reward& c) { return c.overlaps(r); });
+        if (hidden) {
             qCWarning(lcService) << "admin reward" << r.serial
-                                 << "is hidden by the config reward with the same serial";
+                                 << "is hidden by a config reward using the same serial";
             continue;
         }
         merged_.append(r);
@@ -106,8 +110,6 @@ void RevelationsService::handle(const HttpRequest& request, HttpServer::Responde
     const qsizetype comma = header.indexOf(',');
     const QString code = QString::fromLatin1(comma < 0 ? header : header.left(comma)).trimmed();
     const bool placeholder = code.isEmpty() || code == QLatin1String("AUTHEN");
-
-    // Every player is a shadNet account: requests without a real code are refused.
     if (placeholder) {
         qCWarning(lcService).noquote()
             << endpoint << "from" << ip << "rejected: no shadNet authorization code";
@@ -170,8 +172,6 @@ void RevelationsService::serve(const QString& endpoint, const HttpRequest& reque
 
 HttpResponse RevelationsService::denied(const QString& endpoint, int status,
                                         const QString& message) const {
-    // reguc, reudw and redrw report failures in their body, regrw and regev have no result field,
-    // so a non-200 status is the only way to make the game treat the call as failed.
     if (endpoint == QLatin1String("regrw.php") || endpoint == QLatin1String("regev.php")) {
         HttpResponse response;
         response.status = status;
@@ -212,6 +212,7 @@ HttpResponse RevelationsService::regrw(const Player& player, const HttpRequest& 
     maxNum = std::clamp(maxNum, 0, MaxRewardsPerRequest);
 
     const QSet<qint64> claimed = storage_->claimedSerials(player.id);
+    const QDateTime now = QDateTime::currentDateTimeUtc();
     JsonWriter w;
     w.beginArray();
     int count = 0;
@@ -219,10 +220,11 @@ HttpResponse RevelationsService::regrw(const Player& player, const HttpRequest& 
         if (count == maxNum) {
             break;
         }
-        if (claimed.contains(reward.serial) || !reward.offeredTo(onlineId)) {
+        const auto serial = reward.serialAt(now); // nullopt while its window is closed
+        if (!serial || claimed.contains(*serial) || !reward.offeredTo(onlineId)) {
             continue;
         }
-        w.beginObject().key("serial").value(reward.serial).key("type").value(qint64(reward.type));
+        w.beginObject().key("serial").value(*serial).key("type").value(qint64(reward.type));
         for (const auto& [name, value] : reward.fields) {
             w.key(name).value(value);
         }
@@ -249,9 +251,11 @@ HttpResponse RevelationsService::redrw(const Player& player, const QByteArray& b
         return result(false, QStringLiteral("missing serial list"));
     }
     QSet<qint64> offered;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
     for (const Reward& reward : merged_) {
-        if (reward.offeredTo(onlineId)) {
-            offered.insert(reward.serial);
+        const auto serial = reward.serialAt(now);
+        if (serial && reward.offeredTo(onlineId)) {
+            offered.insert(*serial);
         }
     }
     const QSet<qint64> already = storage_->claimedSerials(player.id);
@@ -299,12 +303,83 @@ HttpResponse RevelationsService::redrw(const Player& player, const QByteArray& b
     return result(true);
 }
 
+RevelationsService::CurrentEvent RevelationsService::currentEvent() const {
+    CurrentEvent current;
+    if (eventOverride_) {
+        current.json = *eventOverride_;
+        current.source = QStringLiteral("admin");
+    } else if (const auto window = activeWindow(schedule_, QDateTime::currentDateTimeUtc())) {
+        current.json = window->entry->eventJson;
+        current.source = QStringLiteral("schedule");
+        current.window = window;
+    } else {
+        current.json = config_.eventJson;
+        current.source = QStringLiteral("config");
+    }
+    const QString key =
+        current.source + (current.window ? ':' + current.window->entry->name : QString());
+    if (key != lastEventKey_) {
+        if (!lastEventKey_.isEmpty()) {
+            if (current.window) {
+                qCInfo(lcService).noquote()
+                    << "scheduled event" << current.window->entry->name << "started, until"
+                    << current.window->end.toString(Qt::ISODate);
+            } else {
+                qCInfo(lcService).noquote()
+                    << "event now from"
+                    << (current.source == QLatin1String("admin") ? "the admin API" : "the config");
+            }
+        }
+        lastEventKey_ = key;
+    }
+    return current;
+}
+
+QJsonObject RevelationsService::eventInfo(int upcoming) const {
+    const CurrentEvent current = currentEvent();
+    const auto lines = [](const QByteArray& json) {
+        return QJsonArray::fromStringList(describeEvent(json));
+    };
+    QJsonObject now{
+        {"source", current.source},
+        {"description", lines(current.json)},
+    };
+    if (current.window) {
+        now.insert("name", current.window->entry->name);
+        now.insert("start", current.window->start.toSecsSinceEpoch());
+        now.insert("end", current.window->end.toSecsSinceEpoch());
+        if (!current.window->entry->description.isEmpty()) {
+            now.insert("text", current.window->entry->description);
+        }
+    }
+    QJsonArray next;
+    for (const EventWindow& w :
+         upcomingWindows(schedule_, QDateTime::currentDateTimeUtc(), upcoming)) {
+        QJsonObject o{
+            {"name", w.entry->name},
+            {"start", w.start.toSecsSinceEpoch()},
+            {"end", w.end.toSecsSinceEpoch()},
+            {"description", lines(w.entry->eventJson)},
+        };
+        if (!w.entry->description.isEmpty()) {
+            o.insert("text", w.entry->description);
+        }
+        next.append(o);
+    }
+    return QJsonObject{{"current", now}, {"upcoming", next}};
+}
+
 HttpResponse RevelationsService::regev() {
-    const QByteArray event = eventJson();
+    const CurrentEvent current = currentEvent();
+    const QByteArray& event = current.json;
+    QString from =
+        current.source == QLatin1String("admin") ? QStringLiteral("(set through the admin API)")
+        : current.window
+            ? QStringLiteral("(scheduled: %1, until %2)")
+                  .arg(current.window->entry->name, current.window->end.toString(Qt::ISODate))
+            : QStringLiteral("(from the config)");
     qCInfo(lcService).noquote() << "sending event"
-                                << (event == "{}" ? QByteArray("{} (no event)") : event)
-                                << (eventOverride() ? "(set through the admin API)"
-                                                    : "(from the config)");
+                                << (event == "{}" ? QByteArray("{} (no event)") : event) << from;
     return encrypted(event);
 }
 
@@ -350,12 +425,14 @@ HttpResponse RevelationsService::leaderboards(bool json) {
         boards_ = {};
         return response;
     }
+    QJsonObject page = boards_;
+    page.insert("event", eventInfo(3));
     if (json) {
         response.contentType = "application/json";
-        response.body = QJsonDocument(boards_).toJson(QJsonDocument::Compact);
+        response.body = QJsonDocument(page).toJson(QJsonDocument::Compact);
     } else {
         response.contentType = "text/html; charset=utf-8";
-        response.body = leaderboardsHtml(boards_);
+        response.body = leaderboardsHtml(page);
     }
     return response;
 }

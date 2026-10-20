@@ -4,6 +4,7 @@
 #include "reward_dialog.h"
 
 #include "reward_catalog.h"
+#include "window_editor.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -94,6 +95,13 @@ RewardDialog::RewardDialog(qint64 serial, const QStringList& players, QWidget* p
     players_->setToolTip(tr("Comma-separated shadNet online IDs. "
                             "Leave empty to offer the reward to every player."));
 
+    window_ = new WindowEditor(true);
+    windowNote_ = new QLabel(
+        tr("A weekly reward is a new gift every week: week N is sent as serial + N, so it "
+           "uses this serial and the next 999. Keep other rewards out of that range."));
+    windowNote_->setWordWrap(true);
+    windowNote_->setStyleSheet(QStringLiteral("color: palette(mid)"));
+
     preview_ = new QPlainTextEdit;
     preview_->setReadOnly(true);
     preview_->setMaximumHeight(70);
@@ -106,6 +114,8 @@ RewardDialog::RewardDialog(qint64 serial, const QStringList& players, QWidget* p
     form->addRow(tr("Type"), type_);
     form->addRow(pages_);
     form->addRow(tr("For players"), players_);
+    form->addRow(tr("Available"), window_);
+    form->addRow(QString(), windowNote_);
     form->addRow(tr("JSON"), preview_);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -128,11 +138,12 @@ RewardDialog::RewardDialog(qint64 serial, const QStringList& players, QWidget* p
     }
     connect(randomTag_, &QCheckBox::toggled, this, &RewardDialog::updatePreview);
     connect(players_, &QLineEdit::textChanged, this, &RewardDialog::updatePreview);
+    connect(window_, &WindowEditor::changed, this, &RewardDialog::updatePreview);
     if (!players.isEmpty()) {
         type_->setCurrentIndex(2);
     }
     updatePreview();
-    resize(460, sizeHint().height());
+    resize(520, sizeHint().height());
 }
 
 QJsonObject RewardDialog::reward() const {
@@ -165,10 +176,15 @@ QJsonObject RewardDialog::reward() const {
     if (!players.isEmpty()) {
         r.insert("players", players);
     }
+    const QJsonObject window = window_->window();
+    for (auto it = window.begin(); it != window.end(); ++it) {
+        r.insert(it.key(), it.value());
+    }
     return r;
 }
 
 void RewardDialog::updatePreview() {
+    windowNote_->setVisible(window_->window().contains("weekly"));
     preview_->setPlainText(
         QString::fromUtf8(QJsonDocument(reward()).toJson(QJsonDocument::Compact)));
 }

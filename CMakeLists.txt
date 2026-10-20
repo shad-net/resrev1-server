@@ -34,6 +34,10 @@ add_executable(resrev1srv
     src/upload_decoder.h
     src/leaderboard.cpp
     src/leaderboard.h
+    src/event_schedule.cpp
+    src/event_schedule.h
+    src/time_window.cpp
+    src/time_window.h
 )
 
 target_link_libraries(resrev1srv PRIVATE Qt6::Core Qt6::Network Qt6::Sql)
@@ -74,14 +78,19 @@ if(REVELATIONS_BUILD_ADMIN)
             admin/api_client.h
             admin/event_editor.cpp
             admin/event_editor.h
+            admin/event_presets.h
             admin/main.cpp
             admin/main_window.cpp
             admin/main_window.h
             admin/reward_catalog.h
             admin/reward_dialog.cpp
             admin/reward_dialog.h
+            admin/schedule_dialog.cpp
+            admin/schedule_dialog.h
             admin/stats_dialog.cpp
             admin/stats_dialog.h
+            admin/window_editor.cpp
+            admin/window_editor.h
         )
         target_link_libraries(revelations-admin PRIVATE Qt6::Widgets Qt6::Network)
         if(MSVC)

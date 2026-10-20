@@ -18,27 +18,33 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <iterator>
+
 namespace {
 
 QString when(qint64 secs) {
-    return secs > 0 ? QDateTime::fromSecsSinceEpoch(secs).toString(QStringLiteral("yyyy-MM-dd hh:mm")) : QStringLiteral("-");
+    return secs > 0
+               ? QDateTime::fromSecsSinceEpoch(secs).toString(QStringLiteral("yyyy-MM-dd hh:mm"))
+               : QStringLiteral("-");
 }
 
 QString duration(qint64 secs) {
     return QStringLiteral("%1:%2").arg(secs / 60).arg(secs % 60, 2, 10, QLatin1Char('0'));
 }
 
-// Seen: 1 for an A and 2 for a B. 0 and 3 are assumed to be S and C.
 QString rankName(qint64 rank) {
+    // 0 = S and 1 = A are confirmed in game, 2 and 3 follow the order (B, C).
     switch (rank) {
     case 0:
-        return QStringLiteral("S?");
+        return QStringLiteral("S");
     case 1:
         return QStringLiteral("A");
     case 2:
         return QStringLiteral("B");
     case 3:
-        return QStringLiteral("C?");
+        return QStringLiteral("C");
+    case 4:
+        return QStringLiteral("-");
     default:
         return QString::number(rank);
     }
@@ -81,7 +87,8 @@ QWidget* withNote(const QString& note, QWidget* content) {
 }
 
 QString recordName(const QJsonObject& r) {
-    return r.value("table").toString() + QString::number(r.value("index").toInteger());
+    const QString id = r.value("table").toString() + QString::number(r.value("index").toInteger());
+    return r.contains("name") ? QStringLiteral("%1  %2").arg(id, r.value("name").toString()) : id;
 }
 
 } // namespace
@@ -112,27 +119,33 @@ StatsDialog::StatsDialog(ApiClient* api, qint64 playerId, const QString& player,
     auto* totalsBox = new QGroupBox(tr("Totals"));
     totalsBox->setLayout(totals);
 
-    const QStringList stageColumns = {tr("Record"), tr("Rank"), tr("Accuracy"), tr("Enemies"), tr("Clear time"),
-                                      tr("Damage taken"), tr("Plays")};
+    const QStringList stageColumns = {tr("Record"),  tr("Rank"),       tr("Accuracy"),
+                                      tr("Enemies"), tr("Clear time"), tr("Damage taken"),
+                                      tr("Plays")};
     records_ = table(stageColumns + QStringList{tr("First set"), tr("Byte 1"), tr("Failed")});
     bests_ = table(stageColumns);
     changes_ = table({tr("Offset"), tr("Field"), tr("Before"), tr("After"), tr("Difference")});
     other_ = table({tr("Offset"), tr("Value"), tr("Hex")});
 
     tabs_ = new QTabWidget;
-    tabs_->addTab(withNote(tr("The latest clear of each stage, as the game keeps it. Records Bn are Raid Mode (B0 and B1 "
-                              "were Stage 1 and 2 on Chasm); An are probably the Campaign."),
+    tabs_->addTab(withNote(tr("The latest clear of each stage, as the game keeps it. Records Bn "
+                              "are Raid Mode (B0 and B1 "
+                              "were Stage 1 and 2 on Chasm),An are probably the Campaign."),
                            records_),
                   tr("Stage records"));
-    tabs_->addTab(withNote(tr("The best result per stage across this player's uploads up to the one shown. The game keeps "
+    tabs_->addTab(withNote(tr("The best result per stage across this player's uploads up to the "
+                              "one shown. The game keeps "
                               "only the latest clear, so these come from the server's history."),
                            bests_),
                   tr("Personal bests"));
-    tabs_->addTab(withNote(tr("Every 32-bit value that changed since the previous upload. Fields without a name are not "
-                              "mapped yet; comparing them with what happened in the run helps map them."),
-                           changes_),
-                  tr("Changes"));
-    tabs_->addTab(withNote(tr("Every non-zero value outside the mapped fields."), other_), tr("Not mapped"));
+    tabs_->addTab(
+        withNote(tr("Every 32-bit value that changed since the previous upload. Fields without a "
+                    "name are not "
+                    "mapped yet. comparing them with what happened in the run helps map them."),
+                 changes_),
+        tr("Changes"));
+    tabs_->addTab(withNote(tr("Every non-zero value outside the mapped fields."), other_),
+                  tr("Not mapped"));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -144,33 +157,35 @@ StatsDialog::StatsDialog(ApiClient* api, qint64 playerId, const QString& player,
     layout->addWidget(buttons);
     resize(900, 620);
 
-    connect(uploads_, qOverload<int>(&QComboBox::activated), this, [this](int index) {
-        loadUpload(uploads_->itemData(index).toLongLong());
-    });
+    connect(uploads_, qOverload<int>(&QComboBox::activated), this,
+            [this](int index) { loadUpload(uploads_->itemData(index).toLongLong()); });
     loadHistory();
 }
 
 void StatsDialog::loadHistory() {
     status_->setText(tr("Loading..."));
-    api_->get(QStringLiteral("/api/players/%1/history").arg(playerId_), [this](const ApiClient::Reply& r) {
-        if (!r.ok()) {
-            status_->setText(tr("Could not load the history: %1").arg(r.error));
-            return;
-        }
-        const QJsonArray list = r.json().array();
-        uploads_->clear();
-        for (qsizetype i = list.size() - 1; i >= 0; --i) {
-            const QJsonObject h = list[i].toObject();
-            uploads_->addItem(tr("%1  (#%2)").arg(when(h.value("received").toInteger())).arg(h.value("id").toInteger()),
-                              h.value("id").toInteger());
-        }
-        if (uploads_->count() == 0) {
-            status_->setText(tr("No uploads yet"));
-            return;
-        }
-        uploads_->setCurrentIndex(0);
-        loadUpload(uploads_->itemData(0).toLongLong());
-    });
+    api_->get(QStringLiteral("/api/players/%1/history").arg(playerId_),
+              [this](const ApiClient::Reply& r) {
+                  if (!r.ok()) {
+                      status_->setText(tr("Could not load the history: %1").arg(r.error));
+                      return;
+                  }
+                  const QJsonArray list = r.json().array();
+                  uploads_->clear();
+                  for (qsizetype i = list.size() - 1; i >= 0; --i) {
+                      const QJsonObject h = list[i].toObject();
+                      uploads_->addItem(tr("%1  (#%2)")
+                                            .arg(when(h.value("received").toInteger()))
+                                            .arg(h.value("id").toInteger()),
+                                        h.value("id").toInteger());
+                  }
+                  if (uploads_->count() == 0) {
+                      status_->setText(tr("No uploads yet"));
+                      return;
+                  }
+                  uploads_->setCurrentIndex(0);
+                  loadUpload(uploads_->itemData(0).toLongLong());
+              });
 }
 
 void StatsDialog::loadUpload(qint64 uploadId) {
@@ -189,21 +204,35 @@ void StatsDialog::display(const QJsonObject& s) {
     const int count = uploads_->count();
     status_->setText(count == 1 ? tr("1 upload kept") : tr("%1 uploads kept").arg(count));
     if (!s.value("valid").toBool()) {
-        status_->setText(tr("This upload (%1 bytes) is not a player record this version understands.")
-                             .arg(s.value("size").toInteger()));
+        status_->setText(
+            tr("This upload (%1 bytes) is not a player record this version understands.")
+                .arg(s.value("size").toInteger()));
         return;
     }
     const QJsonObject t = s.value("totals").toObject();
-    level_->setText(QString::number(t.value("level").toInteger()));
+    // Total EXP needed for each level (coop_table/playerLevel, levels 1-11).
+    static const qint64 thresholds[] = {0,    500,  1220,  2160,  3320, 4700,
+                                        6300, 8120, 10160, 12420, 14900};
+    const qint64 level = t.value("level").toInteger();
+    const qint64 exp = t.value("exp_total").toInteger();
+    QString levelText = tr("%1  (%2 EXP in total").arg(level).arg(exp);
+    if (level >= 1 && level < qint64(std::size(thresholds))) {
+        levelText += tr(", next level at %1").arg(thresholds[level]);
+    }
+    level_->setText(levelText + QLatin1Char(')'));
     enemies_->setText(QString::number(t.value("enemies_total").toInteger()));
     clearTime_->setText(duration(t.value("clear_time_total").toInteger()));
     QStringList perCharacter;
     for (const QJsonValue& v : s.value("character_runs").toArray()) {
         const QJsonObject c = v.toObject();
-        perCharacter << QStringLiteral("%1 %2").arg(c.value("character").toString()).arg(c.value("runs").toInteger());
+        perCharacter << QStringLiteral("%1 %2")
+                            .arg(c.value("character").toString())
+                            .arg(c.value("runs").toInteger());
     }
     stagesCleared_->setText(QString::number(t.value("runs_total").toInteger()) +
-                            (perCharacter.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(perCharacter.join(", "))));
+                            (perCharacter.isEmpty()
+                                 ? QString()
+                                 : QStringLiteral(" (%1)").arg(perCharacter.join(", "))));
     created_->setText(when(s.value("created").toInteger()));
 
     const QJsonArray records = s.value("records").toArray();
@@ -230,7 +259,8 @@ void StatsDialog::display(const QJsonObject& s) {
         const QJsonObject b = bests[i].toObject();
         const auto cell = [&](int column, const QString& value, const char* atKey) {
             auto* item = text(value);
-            item->setToolTip(tr("First seen in the upload of %1").arg(when(b.value(atKey).toInteger())));
+            item->setToolTip(
+                tr("First seen in the upload of %1").arg(when(b.value(atKey).toInteger())));
             bests_->setItem(i, column, item);
         };
         bests_->setItem(i, 0, text(recordName(b)));
@@ -249,22 +279,31 @@ void StatsDialog::display(const QJsonObject& s) {
         const qint64 before = c.value("before").toInteger();
         const qint64 after = c.value("after").toInteger();
         changes_->setItem(i, 0, text(hex(c.value("offset").toInteger(), 4)));
-        changes_->setItem(i, 1, text(c.value("field").toString().isEmpty() ? tr("(not mapped)") : c.value("field").toString()));
+        changes_->setItem(i, 1,
+                          text(c.value("field").toString().isEmpty()
+                                   ? tr("(not mapped)")
+                                   : c.value("field").toString()));
         changes_->setItem(i, 2, number(before));
         changes_->setItem(i, 3, number(after));
-        QString difference = after >= before ? QStringLiteral("+%1").arg(after - before) : QString::number(after - before);
+        QString difference = after >= before ? QStringLiteral("+%1").arg(after - before)
+                                             : QString::number(after - before);
         if (c.value("field").toString().endsWith(QLatin1String("rank/byte1/accuracy"))) {
             // Three byte fields share this word.
             const auto byte = [](qint64 v, int n) { return (v >> (8 * n)) & 0xff; };
             difference = tr("rank %1 -> %2, byte 1 %3 -> %4, accuracy %5 -> %6")
                              .arg(rankName(byte(before, 0)), rankName(byte(after, 0)))
-                             .arg(byte(before, 1)).arg(byte(after, 1))
-                             .arg(byte(before, 2)).arg(byte(after, 2));
+                             .arg(byte(before, 1))
+                             .arg(byte(after, 1))
+                             .arg(byte(before, 2))
+                             .arg(byte(after, 2));
         }
         changes_->setItem(i, 4, text(difference));
     }
-    tabs_->setTabText(2, s.contains("previous_id") ? tr("Changes (%1 since %2)").arg(changes.size()).arg(when(s.value("previous_uploaded").toInteger()))
-                                                   : tr("Changes (first upload)"));
+    tabs_->setTabText(2, s.contains("previous_id")
+                             ? tr("Changes (%1 since %2)")
+                                   .arg(changes.size())
+                                   .arg(when(s.value("previous_uploaded").toInteger()))
+                             : tr("Changes (first upload)"));
 
     const QJsonArray other = s.value("other").toArray();
     other_->setRowCount(int(other.size()));

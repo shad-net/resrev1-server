@@ -13,6 +13,7 @@ class QLineEdit;
 class QPlainTextEdit;
 class QSpinBox;
 class QStackedWidget;
+class WindowEditor;
 
 class RewardDialog : public QDialog {
     Q_OBJECT
@@ -37,5 +38,7 @@ private:
     QSpinBox* slot_;
     QCheckBox* randomTag_;
     QLineEdit* players_;
+    WindowEditor* window_;
+    QLabel* windowNote_;
     QPlainTextEdit* preview_;
 };

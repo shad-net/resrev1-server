@@ -4,6 +4,7 @@
 #include "admin_service.h"
 
 #include "config.h"
+#include "event_schedule.h"
 #include "leaderboard.h"
 #include "revelations_service.h"
 #include "storage.h"
@@ -23,6 +24,7 @@ namespace {
 Q_LOGGING_CATEGORY(lcAdmin, "admin")
 
 const QString EventSetting = QStringLiteral("event");
+const QString ScheduleSetting = QStringLiteral("event_schedule");
 
 QJsonObject eventObject(const QByteArray& json) {
     return QJsonDocument::fromJson(json).object();
@@ -74,6 +76,18 @@ bool AdminService::loadStored(QString* error) {
             qCInfo(lcAdmin) << "using the event set through the admin API";
         } else {
             qCWarning(lcAdmin).noquote() << "ignoring stored event:" << why;
+        }
+    }
+    if (const auto schedule = storage_->setting(ScheduleSetting)) {
+        QVector<ScheduledEvent> entries;
+        QString why;
+        if (parseEventSchedule(QJsonDocument::fromJson(*schedule).array(), &entries, &why,
+                               QStringLiteral("schedule"))) {
+            service_->setAdminSchedule(entries);
+            qCInfo(lcAdmin) << "using" << entries.size()
+                            << "schedule entr(ies) set through the admin API";
+        } else {
+            qCWarning(lcAdmin).noquote() << "ignoring stored schedule:" << why;
         }
     }
     const auto stored = storage_->storedRewards();
@@ -153,6 +167,14 @@ HttpResponse AdminService::route(const HttpRequest& request) {
             return clearEvent();
         }
     }
+    if (what == QLatin1String("schedule") && parts.size() == 2) {
+        if (m == "GET") {
+            return schedule();
+        }
+        if (m == "PUT" || m == "POST") {
+            return setSchedule(request.body);
+        }
+    }
     if (what == QLatin1String("leaderboards") && parts.size() == 2 && m == "GET") {
         return leaderboards(request.query.queryItemValue(QStringLiteral("size")));
     }
@@ -186,8 +208,7 @@ HttpResponse AdminService::status() {
                          {"players", list ? qint64(list->size()) : -1},
                          {"config_rewards", qint64(c.rewards.size())},
                          {"admin_rewards", qint64(service_->storedRewards().size())},
-                         {"event_source", service_->eventOverride() ? QStringLiteral("admin")
-                                                                    : QStringLiteral("config")},
+                         {"event_source", service_->currentEvent().source},
                      });
 }
 
@@ -302,20 +323,40 @@ HttpResponse AdminService::resetClaims(qint64 playerId, const QByteArray& body) 
 
 HttpResponse AdminService::rewards() {
     const QHash<qint64, int> counts = storage_->claimCounts();
-    QSet<qint64> configSerials;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    // Claims of every serial the reward can use (a weekly reward's whole range), and its window.
+    const auto describe = [&](const Reward& r, const QString& source) {
+        QJsonObject obj = rewardToJson(r);
+        obj.insert("source", source);
+        qint64 claims = 0;
+        for (auto it = counts.begin(); it != counts.end(); ++it) {
+            if (it.key() >= r.serial && it.key() <= r.lastSerial()) {
+                claims += it.value();
+            }
+        }
+        obj.insert("claims", claims);
+        const auto serial = r.serialAt(now);
+        obj.insert("active", serial.has_value());
+        if (r.window) {
+            obj.insert("available", describeTimeWindow(*r.window));
+            if (serial) {
+                obj.insert("current_serial", *serial);
+                obj.insert("current_claims", counts.value(*serial));
+            } else if (const auto next = nextOccurrence(*r.window, now)) {
+                obj.insert("next_start", next->start.toSecsSinceEpoch());
+            }
+        }
+        return obj;
+    };
     QJsonArray out;
     for (const Reward& r : service_->config().rewards) {
-        QJsonObject obj = rewardToJson(r);
-        obj.insert("source", QStringLiteral("config"));
-        obj.insert("claims", counts.value(r.serial));
-        out.append(obj);
-        configSerials.insert(r.serial);
+        out.append(describe(r, QStringLiteral("config")));
     }
     for (const Reward& r : service_->storedRewards()) {
-        QJsonObject obj = rewardToJson(r);
-        obj.insert("source", QStringLiteral("admin"));
-        obj.insert("claims", counts.value(r.serial));
-        if (configSerials.contains(r.serial)) {
+        QJsonObject obj = describe(r, QStringLiteral("admin"));
+        const auto& config = service_->config().rewards;
+        if (std::any_of(config.begin(), config.end(),
+                        [&r](const Reward& c) { return c.overlaps(r); })) {
             obj.insert("hidden", true);
         }
         out.append(obj);
@@ -335,14 +376,23 @@ HttpResponse AdminService::addReward(const QByteArray& body) {
         return error(400, why);
     }
     for (const Reward& r : service_->config().rewards) {
-        if (r.serial == reward.serial) {
-            return error(409,
-                         QStringLiteral("serial %1 is used by a config reward").arg(reward.serial));
+        if (r.overlaps(reward)) {
+            return error(
+                409, QStringLiteral(
+                         "serial %1 is used by config reward %2 (weekly rewards use %3 serials)")
+                         .arg(reward.serial)
+                         .arg(r.serial)
+                         .arg(Reward::WeeklySerials));
         }
     }
     for (const Reward& r : service_->storedRewards()) {
-        if (r.serial == reward.serial) {
-            return error(409, QStringLiteral("serial %1 is already used").arg(reward.serial));
+        if (r.overlaps(reward)) {
+            return error(
+                409, QStringLiteral(
+                         "serial %1 is already used by reward %2 (weekly rewards use %3 serials)")
+                         .arg(reward.serial)
+                         .arg(r.serial)
+                         .arg(Reward::WeeklySerials));
         }
     }
     const QJsonObject normalized = rewardToJson(reward);
@@ -383,9 +433,9 @@ HttpResponse AdminService::removeReward(qint64 serial) {
 
 HttpResponse AdminService::event() {
     return json(200, QJsonObject{
-                         {"source", service_->eventOverride() ? QStringLiteral("admin")
-                                                              : QStringLiteral("config")},
+                         {"source", service_->currentEvent().source},
                          {"event", eventObject(service_->eventJson())},
+                         {"info", service_->eventInfo(10)},
                          {"config_event", eventObject(service_->config().eventJson)},
                      });
 }
@@ -413,12 +463,12 @@ HttpResponse AdminService::clearEvent() {
         return error(500, QStringLiteral("storage error"));
     }
     service_->setEventOverride(std::nullopt);
-    qCInfo(lcAdmin) << "event cleared, using the config's event";
+    qCInfo(lcAdmin) << "event cleared, back to the schedule and the config's event";
     return event();
 }
 
 HttpResponse AdminService::leaderboards(const QString& size) {
-    int limit = 0;
+    int limit = 0; // the admin API returns every player unless asked for fewer
     if (!size.isEmpty()) {
         bool ok = false;
         limit = size.toInt(&ok);
@@ -431,4 +481,59 @@ HttpResponse AdminService::leaderboards(const QString& size) {
         return error(500, QStringLiteral("storage error"));
     }
     return json(200, boards);
+}
+
+HttpResponse AdminService::schedule() {
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    const auto list = [&](const QVector<ScheduledEvent>& entries) {
+        QJsonArray out;
+        for (const ScheduledEvent& e : entries) {
+            QJsonObject o = scheduledEventToJson(e);
+            o.insert("when", describeTimeWindow(e.window));
+            o.insert("effects", QJsonArray::fromStringList(describeEvent(e.eventJson)));
+            if (const auto open = occurrenceAt(e.window, now)) {
+                o.insert("open_until", open->end.toSecsSinceEpoch());
+            }
+            if (const auto next = nextOccurrence(e.window, now)) {
+                o.insert("next_start", next->start.toSecsSinceEpoch());
+            }
+            out.append(o);
+        }
+        return out;
+    };
+    QJsonObject running;
+    if (const auto window = activeWindow(service_->schedule(), now)) {
+        running =
+            QJsonObject{{"name", window->entry->name}, {"end", window->end.toSecsSinceEpoch()}};
+    }
+    return json(200, QJsonObject{
+                         {"admin", list(service_->adminSchedule())},
+                         {"config", list(service_->config().eventSchedule)},
+                         {"running", running},
+                         {"overridden", service_->eventOverride().has_value()},
+                     });
+}
+
+HttpResponse AdminService::setSchedule(const QByteArray& body) {
+    const QJsonDocument doc = QJsonDocument::fromJson(body);
+    if (!doc.isArray()) {
+        return error(400, QStringLiteral("body must be an array of schedule entries"));
+    }
+    QVector<ScheduledEvent> entries;
+    QString why;
+    if (!parseEventSchedule(doc.array(), &entries, &why, QStringLiteral("schedule"))) {
+        return error(400, why);
+    }
+    QJsonArray normalized;
+    for (const ScheduledEvent& e : entries) {
+        normalized.append(scheduledEventToJson(e));
+    }
+    const QByteArray stored = QJsonDocument(normalized).toJson(QJsonDocument::Compact);
+    if (!(entries.isEmpty() ? storage_->removeSetting(ScheduleSetting)
+                            : storage_->setSetting(ScheduleSetting, stored))) {
+        return error(500, QStringLiteral("storage error"));
+    }
+    service_->setAdminSchedule(entries);
+    qCInfo(lcAdmin) << "schedule set:" << entries.size() << "entr(ies)";
+    return schedule();
 }

@@ -45,12 +45,18 @@ QString duration(qint64 seconds) {
 }
 
 QString rankName(qint64 rank) {
-    // Only 1 = A is confirmed; 2 is probably B.
+    // 0 = S and 1 = A are confirmed in game, 2 and 3 follow the order (B, C).
     switch (rank) {
+    case 0:
+        return QStringLiteral("S");
     case 1:
         return QStringLiteral("A");
     case 2:
-        return QStringLiteral("B?");
+        return QStringLiteral("B");
+    case 3:
+        return QStringLiteral("C");
+    case 4:
+        return QStringLiteral("-");
     default:
         return QString::number(rank);
     }
@@ -63,8 +69,49 @@ QString escape(const QString& text) {
 } // namespace
 
 QString stageRecordName(const QString& table, int index) {
-    if (table == QLatin1String("B") && index >= 0 && index < 3) {
-        return QStringLiteral("Raid Stage %1, Chasm").arg(index + 1);
+    static const char* stages[] = {"Crew Quarters Area 1",
+                                   "Beach",
+                                   "Crew Quarters Area 2",
+                                   "Snowy Mountain 1",
+                                   "Guest Cabin",
+                                   "Promenade Deck",
+                                   "Terragrigia 1",
+                                   "Crew Quarters Area 3",
+                                   "Bilge Block",
+                                   "Snowy Mountain 2",
+                                   "Semiramis",
+                                   "Observation Deck",
+                                   "Side Deck",
+                                   "Flood",
+                                   "Zenobia",
+                                   "Airstrip",
+                                   "Laboratory",
+                                   "Emergency Passageway",
+                                   "Terragrigia 2",
+                                   "Mad Banquet"};
+    static const char* difficulties[] = {"Chasm", "Trench", "Abyss"};
+    if (table == QLatin1String("B") && index >= 0 && index < 60) {
+        return QStringLiteral("Stage %1: %2, %3")
+            .arg(index % 20 + 1)
+            .arg(QLatin1String(stages[index % 20]), QLatin1String(difficulties[index / 20]));
+    }
+    if (table == QLatin1String("B") && (index == 60 || index == 61)) {
+        return QStringLiteral("Bonus Stage: The Ghost Ship, %1")
+            .arg(QLatin1String(difficulties[index - 60]));
+    }
+    // Episode and chapter of each Campaign record
+    static const int chapters[26][2] = {{1, 1},  {1, 2},  {1, 3},  {2, 1},  {2, 2}, {3, 1}, {3, 2},
+                                        {4, 1},  {5, 2},  {5, 1},  {5, 3},  {6, 1}, {6, 2}, {7, 1},
+                                        {7, 2},  {8, 1},  {8, 2},  {8, 3},  {9, 1}, {9, 2}, {10, 1},
+                                        {10, 2}, {11, 1}, {11, 2}, {12, 2}, {12, 3}};
+    if (table == QLatin1String("A") && index >= 0 && index < 78) {
+        const int c = index % 26;
+        // The game's own difficulty order
+        static const char* campaign[] = {"Casual", "Normal", "Infernal"};
+        return QStringLiteral("Campaign Episode %1-%2, %3")
+            .arg(chapters[c][0])
+            .arg(chapters[c][1])
+            .arg(QLatin1String(campaign[index / 26]));
     }
     return QStringLiteral("Record %1%2").arg(table).arg(index);
 }
@@ -209,6 +256,14 @@ tr:last-child td { border-bottom: 0; }
 td.place { color: var(--muted); width: 3em; }
 tr.first td { color: #f2d27a; }
 .empty { padding: 16px; color: var(--muted); }
+.event { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 16px; }
+.event p { margin: 4px 0; }
+.event .title { font-weight: 600; font-size: 16px; }
+.event .title.small { font-size: 15px; margin-top: 10px; }
+.event .title span { color: var(--muted); font-weight: 400; font-size: 14px; }
+.event .none { color: var(--muted); }
+.event .next { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin-top: 14px; }
+.event ul { margin: 4px 0 4px; padding-left: 20px; }
 </style></head><body><main>
 <h1>Raid Mode Leaderboards</h1>
 <p class="note">Built from the players' uploads after each Raid stage. Updated %1.</p>
@@ -216,6 +271,56 @@ tr.first td { color: #f2d27a; }
                        .arg(QDateTime::fromSecsSinceEpoch(boards.value("generated").toInteger())
                                 .toUTC()
                                 .toString(QStringLiteral("yyyy-MM-dd HH:mm 'UTC'")));
+
+    // Current and upcoming events: the game itself never shows them.
+    const QJsonObject event = boards.value("event").toObject();
+    const QJsonObject current = event.value("current").toObject();
+    // Shown in UTC, and in the viewer's own time zone once the script below runs.
+    const auto when = [](qint64 secs) {
+        return QStringLiteral("<time data-t=\"%1\">%2</time>")
+            .arg(secs)
+            .arg(QDateTime::fromSecsSinceEpoch(secs).toUTC().toString(
+                QStringLiteral("ddd d MMM, HH:mm 'UTC'")));
+    };
+    const auto effects = [](const QJsonObject& o) {
+        QString out;
+        if (!o.value("text").toString().isEmpty()) {
+            out += QStringLiteral("<p>%1</p>").arg(escape(o.value("text").toString()));
+        }
+        const QJsonArray lines = o.value("description").toArray();
+        if (!lines.isEmpty()) {
+            out += QStringLiteral("<ul>");
+            for (const QJsonValue& l : lines) {
+                out += QStringLiteral("<li>%1</li>").arg(escape(l.toString()));
+            }
+            out += QStringLiteral("</ul>");
+        }
+        return out;
+    };
+    html += QStringLiteral("<h2>Event</h2><div class=\"event\">");
+    if (current.value("description").toArray().isEmpty() &&
+        current.value("text").toString().isEmpty()) {
+        html += QStringLiteral("<p class=\"none\">No event is running.</p>");
+    } else {
+        html += QStringLiteral("<p class=\"title\">%1%2</p>")
+                    .arg(escape(current.value("name").toString(QStringLiteral("Running now"))))
+                    .arg(current.contains("end") ? QStringLiteral(" <span>until %1</span>")
+                                                       .arg(when(current.value("end").toInteger()))
+                                                 : QString());
+        html += effects(current);
+    }
+    const QJsonArray upcoming = event.value("upcoming").toArray();
+    if (!upcoming.isEmpty()) {
+        html += QStringLiteral("<p class=\"next\">Coming up</p>");
+        for (const QJsonValue& v : upcoming) {
+            const QJsonObject o = v.toObject();
+            html += QStringLiteral("<p class=\"title small\">%1 <span>%2 to %3</span></p>")
+                        .arg(escape(o.value("name").toString()), when(o.value("start").toInteger()),
+                             when(o.value("end").toInteger()));
+            html += effects(o);
+        }
+    }
+    html += QStringLiteral("</div>");
 
     html += QStringLiteral("<h2>Players</h2><div class=\"wrap\">");
     const QJsonArray players = boards.value("players").toArray();
@@ -275,9 +380,16 @@ tr.first td { color: #f2d27a; }
             "<h2>Stages</h2><div class=\"wrap\"><div class=\"empty\">No stage cleared yet."
             "</div></div>");
     }
-    html += QStringLiteral("<p class=\"note\" style=\"margin-top:24px\">Stage boards rank each "
-                           "player's fastest clear, "
-                           "rank, damage and accuracy are that player's bests on the stage.</p>"
-                           "</main></body></html>\n");
+    html += QStringLiteral(
+        "<p class=\"note\" style=\"margin-top:24px\">Stage boards rank each player's fastest "
+        "clear, "
+        "rank, damage and accuracy are that player's bests on the stage.</p>"
+        "</main><script>"
+        "for (const t of document.querySelectorAll('time[data-t]')) {"
+        " try { t.textContent = new Date(t.dataset.t * 1000).toLocaleString(undefined,"
+        " {weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}); "
+        "}"
+        " catch (e) {} }"
+        "</script></body></html>\n");
     return html.toUtf8();
 }

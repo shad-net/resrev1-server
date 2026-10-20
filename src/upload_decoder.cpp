@@ -3,6 +3,8 @@
 
 #include "upload_decoder.h"
 
+#include "leaderboard.h"
+
 #include <QJsonArray>
 #include <QString>
 #include <QtEndian>
@@ -34,13 +36,15 @@ struct Counter {
 };
 
 constexpr Counter Counters[] = {
-    {"level", 0x1dc4},
-    {"enemies_total", 0x1dcc},
-    {"clear_time_total", 0x1dd4},
+    {"level", 0x1dc4},         {"exp_total", 0x1dc8},
+    {"enemies_total", 0x1dcc}, {"clear_time_total", 0x1dd4},
     {"runs_total", 0x1334},
 };
 
+// Raid runs per character
 constexpr qsizetype CharacterRunsOffset = 0x11a8;
+constexpr qsizetype WantedOffset = 0x1de0;
+constexpr qsizetype WantedSize = 0x28;
 constexpr const char* Characters[] = {"Jill",    "Chris",   "Parker",    "Keith",       "Jessica",
                                       "Quint",   "Raymond", "O'Brian",   "Morgan",      "Norman",
                                       "Rachael", "HUNK",    "LADY HUNK", "Rachael Ooze"};
@@ -62,7 +66,6 @@ bool validUpload(const QByteArray& d) {
     return d.size() == UploadSize && d.startsWith("REBH");
 }
 
-// The field at `offset`, or an empty string when it is not mapped.
 QString fieldName(qsizetype offset) {
     if (offset < 16) {
         static const char* header[] = {"magic", "size", "version", "created"};
@@ -72,6 +75,13 @@ QString fieldName(qsizetype offset) {
         if (c.offset == offset) {
             return QLatin1String(c.name);
         }
+    }
+    if (offset >= WantedOffset && offset < WantedOffset + 255 * WantedSize) {
+        const qsizetype rel = (offset - WantedOffset) % WantedSize;
+        const QString part = rel == 0     ? QStringLiteral("order")
+                             : rel < 0x24 ? QStringLiteral("name")
+                                          : QStringLiteral("kind");
+        return QStringLiteral("wanted%1.%2").arg((offset - WantedOffset) / WantedSize).arg(part);
     }
     if (inCharacterRuns(offset)) {
         return QStringLiteral("runs.%1").arg(
@@ -133,6 +143,31 @@ QJsonObject decodeUpload(const QByteArray& d) {
     }
     out.insert("character_runs", characterRuns);
 
+    // Wanted enemies met: 255 entries of 0x28 bytes from 0x1DE0, each a running number (the
+    // oldest is replaced when the list is full), the UTF-16 name shown on the enemy (16
+    // characters), a u16 and the enemy kind as a subjugation ID.
+    QJsonArray wanted;
+    for (int i = 0; i < 255; ++i) {
+        const qsizetype o = WantedOffset + i * WantedSize;
+        const quint32 order = u32(d, o);
+        if (order == 0) {
+            continue;
+        }
+        QString name;
+        for (int c = 0; c < 16; ++c) {
+            const quint16 ch = u16(d, o + 4 + c * 2);
+            if (ch == 0) {
+                break;
+            }
+            name += QChar(ch);
+        }
+        wanted.append(QJsonObject{{"order", qint64(order)},
+                                  {"name", name},
+                                  {"value", qint64(u16(d, o + 0x24))},
+                                  {"enemy_id", qint64(static_cast<quint8>(d[o + 0x26]))}});
+    }
+    out.insert("wanted", wanted);
+
     QJsonArray records;
     for (const Table& t : Tables) {
         for (int i = 0; i < t.count; ++i) {
@@ -149,6 +184,7 @@ QJsonObject decodeUpload(const QByteArray& d) {
             records.append(QJsonObject{
                 {"table", QLatin1String(t.name)},
                 {"index", i},
+                {"name", stageRecordName(QLatin1String(t.name), i)},
                 {"offset", qint64(o)},
                 {"rank", byte(0)},
                 {"unknown1", byte(1)},
@@ -167,7 +203,7 @@ QJsonObject decodeUpload(const QByteArray& d) {
     // Everything else that is not zero, to help map the rest.
     QJsonArray other;
     for (qsizetype o = 16; o + 4 <= d.size(); o += 4) {
-        if (inTables(o) || inCharacterRuns(o)) {
+        if (inTables(o) || inCharacterRuns(o) || o >= WantedOffset) {
             continue;
         }
         bool known = false;
@@ -265,6 +301,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
         out.append(QJsonObject{
             {"table", b.table},
             {"index", b.index},
+            {"name", stageRecordName(b.table, b.index)},
             {"rank", b.rank},
             {"rank_at", b.rankAt},
             {"clear_time", b.time},
