@@ -30,6 +30,7 @@ private:
     HttpResponse event();
     HttpResponse setEvent(const QByteArray& body);
     HttpResponse clearEvent();
+    HttpResponse leaderboards(const QString& size);
 
     Storage* storage_;
     RevelationsService* service_;

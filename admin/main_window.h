@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QMainWindow>
 
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -28,6 +29,9 @@ private:
     QWidget* buildPlayersTab();
     QWidget* buildRewardsTab();
     QWidget* buildEventTab();
+    QWidget* buildLeaderboardTab();
+    void showLeaderboards(const QJsonObject& boards);
+    void showStageBoard();
     void displayEvent(const QJsonObject& reply);
     void applyEvent();
     void clearEvent();
@@ -53,6 +57,7 @@ private:
     ApiClient api_;
     QJsonArray players_;
     QJsonArray rewards_;
+    QJsonObject boards_;
 
     QLineEdit* url_;
     QLineEdit* key_;
@@ -69,6 +74,10 @@ private:
     QPushButton* addReward_;
     QPushButton* refresh_;
     EventEditor* eventEditor_;
+    QTableWidget* playerBoard_;
+    QComboBox* stagePicker_;
+    QTableWidget* stageBoard_;
+    QLabel* boardsNote_;
     QLabel* eventSource_;
     QPushButton* applyEvent_;
     QPushButton* clearEvent_;

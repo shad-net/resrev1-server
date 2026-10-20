@@ -8,9 +8,11 @@
 #include "reward_dialog.h"
 #include "stats_dialog.h"
 
+#include <QComboBox>
 #include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -34,6 +36,23 @@ QString when(qint64 secs) {
         return QStringLiteral("-");
     }
     return QDateTime::fromSecsSinceEpoch(secs).toString(QStringLiteral("yyyy-MM-dd hh:mm"));
+}
+
+// 4:33 under an hour, 1:02:03 from an hour on.
+QString duration(qint64 seconds) {
+    if (seconds < 3600) {
+        return QStringLiteral("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2:%3")
+        .arg(seconds / 3600)
+        .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
+        .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+}
+
+QString rankName(qint64 rank) {
+    return rank == 1   ? QStringLiteral("A")
+           : rank == 2 ? QStringLiteral("B?")
+                       : QString::number(rank);
 }
 
 QTableWidget* makeTable(const QStringList& headers) {
@@ -71,7 +90,6 @@ int selectedIndex(const QTableWidget* table) {
     return table->item(rows.first().row(), 0)->data(Qt::UserRole).toInt();
 }
 
-// What `players` entries are matched against: the player's shadNet online ID.
 QString playerTarget(const QJsonObject& p) {
     return p.value("online_id").toString();
 }
@@ -112,6 +130,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_->addTab(buildPlayersTab(), tr("Players"));
     tabs_->addTab(buildRewardsTab(), tr("Rewards"));
     tabs_->addTab(buildEventTab(), tr("Event"));
+    tabs_->addTab(buildLeaderboardTab(), tr("Leaderboards"));
 
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
@@ -190,6 +209,105 @@ QWidget* MainWindow::buildRewardsTab() {
     connect(addReward_, &QPushButton::clicked, this, [this] { addReward({}); });
     connect(deleteReward_, &QPushButton::clicked, this, &MainWindow::deleteReward);
     return w;
+}
+
+QWidget* MainWindow::buildLeaderboardTab() {
+    playerBoard_ = makeTable({tr("#"), tr("Player"), tr("Level"), tr("Enemies routed"),
+                              tr("Time played"), tr("Raid runs"), tr("Stages cleared")});
+    stagePicker_ = new QComboBox;
+    stageBoard_ = makeTable({tr("#"), tr("Player"), tr("Clear time"), tr("Rank"),
+                             tr("Damage taken"), tr("Accuracy"), tr("Enemies"), tr("Set")});
+    boardsNote_ = new QLabel;
+    boardsNote_->setWordWrap(true);
+
+    auto* playersBox = new QGroupBox(tr("Players (highest level first)"));
+    auto* playersLayout = new QVBoxLayout(playersBox);
+    playersLayout->addWidget(playerBoard_);
+
+    auto* stageBox = new QGroupBox(tr("Stage (fastest clear first)"));
+    auto* stageLayout = new QVBoxLayout(stageBox);
+    stageLayout->addWidget(stagePicker_);
+    stageLayout->addWidget(stageBoard_);
+
+    auto* w = new QWidget;
+    auto* layout = new QVBoxLayout(w);
+    layout->addWidget(boardsNote_);
+    layout->addWidget(playersBox, 1);
+    layout->addWidget(stageBox, 2);
+
+    connect(stagePicker_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &MainWindow::showStageBoard);
+    return w;
+}
+
+void MainWindow::showLeaderboards(const QJsonObject& boards) {
+    boards_ = boards;
+    const QJsonArray players = boards.value("players").toArray();
+    playerBoard_->setSortingEnabled(false);
+    playerBoard_->clearContents();
+    playerBoard_->setRowCount(int(players.size()));
+    for (int i = 0; i < players.size(); ++i) {
+        const QJsonObject r = players[i].toObject();
+        playerBoard_->setItem(i, 0, numberCell(r.value("place").toInteger(), i));
+        playerBoard_->setItem(i, 1, cell(r.value("player").toString(), i));
+        playerBoard_->setItem(i, 2, numberCell(r.value("level").toInteger(), i));
+        playerBoard_->setItem(i, 3, numberCell(r.value("enemies").toInteger(), i));
+        playerBoard_->setItem(i, 4, cell(duration(r.value("time_played").toInteger()), i));
+        playerBoard_->setItem(i, 5, numberCell(r.value("runs").toInteger(), i));
+        playerBoard_->setItem(i, 6, numberCell(r.value("stages_cleared").toInteger(), i));
+    }
+    playerBoard_->setSortingEnabled(true);
+    playerBoard_->sortByColumn(0, Qt::AscendingOrder);
+    playerBoard_->resizeColumnsToContents();
+
+    const QString current = stagePicker_->currentData().toString();
+    stagePicker_->blockSignals(true);
+    stagePicker_->clear();
+    const QJsonArray stages = boards.value("stages").toArray();
+    for (int i = 0; i < stages.size(); ++i) {
+        const QJsonObject st = stages[i].toObject();
+        const QString key =
+            st.value("table").toString() + QString::number(st.value("index").toInteger());
+        stagePicker_->addItem(
+            tr("%1 (%n player(s))", nullptr, int(st.value("entries").toArray().size()))
+                .arg(st.value("name").toString()),
+            key);
+        if (key == current) {
+            stagePicker_->setCurrentIndex(i);
+        }
+    }
+    stagePicker_->blockSignals(false);
+    boardsNote_->setText(
+        stages.isEmpty() ? tr("No stage has been cleared yet.")
+                         : tr("Built from every player's kept uploads. Rank, damage and accuracy "
+                              "are each player's bests on the stage."));
+    showStageBoard();
+}
+
+void MainWindow::showStageBoard() {
+    const QJsonArray stages = boards_.value("stages").toArray();
+    const int index = stagePicker_->currentIndex();
+    const QJsonArray rows = index >= 0 && index < stages.size()
+                                ? stages[index].toObject().value("entries").toArray()
+                                : QJsonArray();
+    stageBoard_->setSortingEnabled(false);
+    stageBoard_->clearContents();
+    stageBoard_->setRowCount(int(rows.size()));
+    for (int i = 0; i < rows.size(); ++i) {
+        const QJsonObject r = rows[i].toObject();
+        stageBoard_->setItem(i, 0, numberCell(r.value("place").toInteger(), i));
+        stageBoard_->setItem(i, 1, cell(r.value("player").toString(), i));
+        stageBoard_->setItem(i, 2, cell(duration(r.value("clear_time").toInteger()), i));
+        stageBoard_->setItem(i, 3, cell(rankName(r.value("rank").toInteger()), i));
+        stageBoard_->setItem(i, 4, numberCell(r.value("damage").toInteger(), i));
+        stageBoard_->setItem(i, 5,
+                             cell(QStringLiteral("%1 %").arg(r.value("accuracy").toInteger()), i));
+        stageBoard_->setItem(i, 6, numberCell(r.value("enemies").toInteger(), i));
+        stageBoard_->setItem(i, 7, cell(when(r.value("set").toInteger()), i));
+    }
+    stageBoard_->setSortingEnabled(true);
+    stageBoard_->sortByColumn(0, Qt::AscendingOrder);
+    stageBoard_->resizeColumnsToContents();
 }
 
 QWidget* MainWindow::buildEventTab() {
@@ -339,6 +457,13 @@ void MainWindow::refresh() {
                 } else {
                     reportError(tr("Load event"), r3);
                 }
+                api_.get(QStringLiteral("/api/leaderboards"), [this](const ApiClient::Reply& r4) {
+                    if (r4.ok()) {
+                        showLeaderboards(r4.json().object());
+                    } else {
+                        reportError(tr("Load leaderboards"), r4);
+                    }
+                });
             });
             setStatus(tr("Connected: %n player(s)", nullptr, int(players_.size())) +
                       QStringLiteral(", ") + tr("%n reward(s)", nullptr, int(rewards_.size())));

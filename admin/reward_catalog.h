@@ -164,13 +164,14 @@ inline const QVector<NamedId>& shopItems() {
     return items;
 }
 
-// Raid Mode enemies in the order of game/rank/CoopEnemyPoint (enemy ID 0x8003 + model code).
-// Whether subjugation_enemy_id indexes this list is not confirmed yet, the game has no enemy names.
+// subjugation_enemy_id 0-19: the enemy model each ID stands for, from the game's own decoder
+// (ID = model index + 21 * (variant + 1); IDs 0-19 are variant -1). The game has no enemy names;
+// they are added as runs confirm them (0: Ooze, Raid Stage 1).
 inline const QStringList& raidEnemies() {
-    static const QStringList models = {"em1000", "em1010", "em1020", "em1030", "em1060", "em1200",
-                                       "em1210", "em1211", "em1220", "em1230", "em1240", "em1300",
-                                       "em1310", "em1400", "em1401", "em1420", "em1440", "em10a0",
-                                       "em1221", "em1420", "em1250", "em1450"};
+    static const QStringList models = {"em1000 Ooze", "em1010", "em1020", "em1030", "em1060",
+                                       "em1210",      "em1230", "em1220", "em1200", "em1300",
+                                       "em1310",      "em1400", "em1410", "em1240", "em1420",
+                                       "em1440",      "em1211", "em1221", "em1401", "em1422"};
     return models;
 }
 

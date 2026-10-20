@@ -32,6 +32,8 @@ add_executable(resrev1srv
     src/storage.h
     src/upload_decoder.cpp
     src/upload_decoder.h
+    src/leaderboard.cpp
+    src/leaderboard.h
 )
 
 target_link_libraries(resrev1srv PRIVATE Qt6::Core Qt6::Network Qt6::Sql)

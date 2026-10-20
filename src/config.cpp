@@ -53,8 +53,6 @@ struct EventKey {
     int maxCount;
 };
 
-// Order and limits follow the game's regev handler. Values named *_rate and
-// subjugation_exp are tenths: the game multiplies them by 0.1.
 const QVector<EventKey>& eventKeys() {
     static const QVector<EventKey> keys = {
         {"subjugation_enemy_id", EventKind::IntArray, U8Max, 20},
@@ -389,6 +387,27 @@ std::optional<ServerConfig> loadConfig(const QByteArray& json, QString* error) {
         }
         config.logMaxBytes = mb * 1024 * 1024;
     }
+    const QJsonValue boards = root.value("leaderboards");
+    if (!boards.isUndefined() && !boards.isObject()) {
+        fail(error, QStringLiteral("leaderboards must be an object"));
+        return std::nullopt;
+    }
+    if (boards.toObject().contains("public")) {
+        const QJsonValue v = boards.toObject().value("public");
+        if (!v.isBool()) {
+            fail(error, QStringLiteral("leaderboards.public must be true or false"));
+            return std::nullopt;
+        }
+        config.leaderboardsPublic = v.toBool();
+    }
+    if (boards.toObject().contains("size")) {
+        qint64 n = 0;
+        if (!readInt(boards.toObject().value("size"), 1, 1000, &n)) {
+            fail(error, QStringLiteral("leaderboards.size must be 1..1000"));
+            return std::nullopt;
+        }
+        config.leaderboardSize = int(n);
+    }
     config.adminKey = admin.value("key").toString();
     if (!config.adminKey.isEmpty() && config.adminKey.size() < 8) {
         fail(error, QStringLiteral("admin.key must be at least 8 characters"));
@@ -414,6 +433,7 @@ QByteArray defaultConfigJson() {
     "shadnet": { "url": "http://127.0.0.1:31315" },
     "admin": { "address": "127.0.0.1", "port": 8081, "key": "@KEY@" },
     "log": { "file": "revelations.log", "max_size_mb": 10 },
+    "leaderboards": { "public": true, "size": 10 },
     "rewards": [],
     "event": {}
 }

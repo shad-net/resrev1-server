@@ -5,19 +5,21 @@
 
 #include "blowfish.h"
 #include "json_writer.h"
+#include "leaderboard.h"
 
-#include <algorithm>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+
+#include <algorithm>
 
 namespace {
 
 Q_LOGGING_CATEGORY(lcService, "revelations")
 
 constexpr int MaxRewardsPerRequest = 20;
-constexpr qsizetype TssMaxSize = 0x100;
 constexpr qsizetype SaveBlobSize = 0x45c0;
 
 QString peerString(const QHostAddress& address) {
@@ -76,6 +78,17 @@ void RevelationsService::handle(const HttpRequest& request, HttpServer::Responde
     }
     const QString endpoint = path.section('/', -1);
     const QString ip = peerString(request.peer);
+
+    if (config_.leaderboardsPublic && request.method == "GET" &&
+        (request.path == QLatin1String("/leaderboards") ||
+         request.path == QLatin1String("/leaderboards/") ||
+         request.path == QLatin1String("/leaderboards.json"))) {
+        const HttpResponse response = leaderboards(request.path.endsWith(QLatin1String(".json")));
+        qCInfo(lcService).noquote()
+            << request.method << request.path << "from" << ip << "->" << response.status;
+        respond(response);
+        return;
+    }
 
     static const QStringList endpoints = {"reguc.php", "reudw.php", "regrw.php", "redrw.php",
                                           "regev.php"};
@@ -287,7 +300,12 @@ HttpResponse RevelationsService::redrw(const Player& player, const QByteArray& b
 }
 
 HttpResponse RevelationsService::regev() {
-    return encrypted(eventJson());
+    const QByteArray event = eventJson();
+    qCInfo(lcService).noquote() << "sending event"
+                                << (event == "{}" ? QByteArray("{} (no event)") : event)
+                                << (eventOverride() ? "(set through the admin API)"
+                                                    : "(from the config)");
+    return encrypted(event);
 }
 
 std::optional<QByteArray> RevelationsService::decryptBody(const QByteArray& body) const {
@@ -316,4 +334,28 @@ HttpResponse RevelationsService::result(bool ok, const QString& message) const {
     }
     w.endObject();
     return encrypted(w.data());
+}
+
+HttpResponse RevelationsService::leaderboards(bool json) {
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    if (boards_.isEmpty() || now - boardsBuilt_ >= 60) {
+        boards_ = buildLeaderboards(*storage_, config_.leaderboardSize);
+        boardsBuilt_ = now;
+    }
+    HttpResponse response;
+    if (boards_.contains("error")) {
+        response.status = 500;
+        response.contentType = "text/plain";
+        response.body = "storage error";
+        boards_ = {};
+        return response;
+    }
+    if (json) {
+        response.contentType = "application/json";
+        response.body = QJsonDocument(boards_).toJson(QJsonDocument::Compact);
+    } else {
+        response.contentType = "text/html; charset=utf-8";
+        response.body = leaderboardsHtml(boards_);
+    }
+    return response;
 }

@@ -8,6 +8,7 @@
 #include <QtEndian>
 
 #include <algorithm>
+#include <iterator>
 
 namespace {
 
@@ -36,8 +37,18 @@ constexpr Counter Counters[] = {
     {"level", 0x1dc4},
     {"enemies_total", 0x1dcc},
     {"clear_time_total", 0x1dd4},
-    {"stages_cleared", 0x11a8},
+    {"runs_total", 0x1334},
 };
+
+constexpr qsizetype CharacterRunsOffset = 0x11a8;
+constexpr const char* Characters[] = {"Jill",    "Chris",   "Parker",    "Keith",       "Jessica",
+                                      "Quint",   "Raymond", "O'Brian",   "Morgan",      "Norman",
+                                      "Rachael", "HUNK",    "LADY HUNK", "Rachael Ooze"};
+constexpr int CharacterCount = int(std::size(Characters));
+
+bool inCharacterRuns(qsizetype offset) {
+    return offset >= CharacterRunsOffset && offset < CharacterRunsOffset + CharacterCount * 4;
+}
 
 quint16 u16(const QByteArray& d, qsizetype offset) {
     return qFromLittleEndian<quint16>(d.constData() + offset);
@@ -51,7 +62,7 @@ bool validUpload(const QByteArray& d) {
     return d.size() == UploadSize && d.startsWith("REBH");
 }
 
-// The field at offset, or an empty string when it is not mapped.
+// The field at `offset`, or an empty string when it is not mapped.
 QString fieldName(qsizetype offset) {
     if (offset < 16) {
         static const char* header[] = {"magic", "size", "version", "created"};
@@ -61,6 +72,10 @@ QString fieldName(qsizetype offset) {
         if (c.offset == offset) {
             return QLatin1String(c.name);
         }
+    }
+    if (inCharacterRuns(offset)) {
+        return QStringLiteral("runs.%1").arg(
+            QLatin1String(Characters[(offset - CharacterRunsOffset) / 4]));
     }
     for (const Table& t : Tables) {
         if (offset >= t.offset && offset < t.offset + t.count * RecordSize) {
@@ -108,6 +123,16 @@ QJsonObject decodeUpload(const QByteArray& d) {
     }
     out.insert("totals", totals);
 
+    QJsonArray characterRuns;
+    for (int i = 0; i < CharacterCount; ++i) {
+        const quint32 runs = u32(d, CharacterRunsOffset + i * 4);
+        if (runs != 0) {
+            characterRuns.append(QJsonObject{
+                {"character", QLatin1String(Characters[i])}, {"index", i}, {"runs", qint64(runs)}});
+        }
+    }
+    out.insert("character_runs", characterRuns);
+
     QJsonArray records;
     for (const Table& t : Tables) {
         for (int i = 0; i < t.count; ++i) {
@@ -142,7 +167,7 @@ QJsonObject decodeUpload(const QByteArray& d) {
     // Everything else that is not zero, to help map the rest.
     QJsonArray other;
     for (qsizetype o = 16; o + 4 <= d.size(); o += 4) {
-        if (inTables(o)) {
+        if (inTables(o) || inCharacterRuns(o)) {
             continue;
         }
         bool known = false;
@@ -201,6 +226,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
         const QJsonArray records = decodeUpload(data).value("records").toArray();
         for (const QJsonValue& v : records) {
             const QJsonObject r = v.toObject();
+            // A stage that was played but never cleared keeps the default time and damage.
             if (r.value("clear_time").toInteger() == 3600000) {
                 continue;
             }
@@ -210,6 +236,7 @@ QJsonArray personalBests(const QVector<QPair<QByteArray, qint64>>& uploads) {
             const qint64 damage = r.value("damage").toInteger();
             const qint64 accuracy = r.value("accuracy").toInteger();
             const qint64 enemies = r.value("enemies").toInteger();
+            // The record carries the latest clear; an unchanged record keeps its first time seen.
             if (rank < b.rank) {
                 b.rank = rank;
                 b.rankAt = received;

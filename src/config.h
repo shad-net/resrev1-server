@@ -36,6 +36,8 @@ struct ServerConfig {
     QString adminKey;
     QString logFile;
     qint64 logMaxBytes = 10 * 1024 * 1024;
+    bool leaderboardsPublic = false;
+    int leaderboardSize = 10;
     QVector<Reward> rewards;
     QByteArray eventJson = QByteArrayLiteral("{}");
 };

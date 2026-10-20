@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2026 Resident Evil Revelations Custom Server Project
 // SPDX-License-Identifier: GPL-2.0-or-later
-
 #pragma once
 
 #include "config.h"
 #include "http_server.h"
 #include "shadnet_verifier.h"
 #include "storage.h"
+
+#include <QJsonObject>
 
 #include <memory>
 
@@ -54,6 +55,7 @@ private:
     HttpResponse result(bool ok, const QString& message = {}) const;
 
     void mergeRewards();
+    HttpResponse leaderboards(bool json);
 
     Storage* storage_;
     ServerConfig config_;
@@ -62,4 +64,6 @@ private:
     std::optional<QByteArray> eventOverride_;
     std::unique_ptr<Blowfish> cipher_;
     ShadNetVerifier verifier_;
+    QJsonObject boards_;
+    qint64 boardsBuilt_ = 0;
 };

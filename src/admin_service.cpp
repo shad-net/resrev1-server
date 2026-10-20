@@ -4,6 +4,7 @@
 #include "admin_service.h"
 
 #include "config.h"
+#include "leaderboard.h"
 #include "revelations_service.h"
 #include "storage.h"
 #include "upload_decoder.h"
@@ -40,6 +41,7 @@ HttpResponse error(int status, const QString& message) {
     return json(status, QJsonObject{{"error", message}});
 }
 
+// Compares digests so the time taken does not depend on how much of the key matches.
 bool sameKey(const QByteArray& given, const QString& expected) {
     const QByteArray a = QCryptographicHash::hash(given, QCryptographicHash::Sha256);
     const QByteArray b = QCryptographicHash::hash(expected.toUtf8(), QCryptographicHash::Sha256);
@@ -151,6 +153,9 @@ HttpResponse AdminService::route(const HttpRequest& request) {
             return clearEvent();
         }
     }
+    if (what == QLatin1String("leaderboards") && parts.size() == 2 && m == "GET") {
+        return leaderboards(request.query.queryItemValue(QStringLiteral("size")));
+    }
     if (what == QLatin1String("rewards")) {
         if (parts.size() == 2 && m == "GET") {
             return rewards();
@@ -249,6 +254,7 @@ HttpResponse AdminService::stats(qint64 playerId, const QString& uploadId) {
         out.insert("previous_uploaded", previous->received);
         out.insert("changes", compareUploads(previous->data, current->data));
     }
+    // Bests up to and including this upload.
     if (const auto all = storage_->history(playerId, true)) {
         QVector<QPair<QByteArray, qint64>> uploads;
         for (const HistoryUpload& h : *all) {
@@ -409,4 +415,20 @@ HttpResponse AdminService::clearEvent() {
     service_->setEventOverride(std::nullopt);
     qCInfo(lcAdmin) << "event cleared, using the config's event";
     return event();
+}
+
+HttpResponse AdminService::leaderboards(const QString& size) {
+    int limit = 0;
+    if (!size.isEmpty()) {
+        bool ok = false;
+        limit = size.toInt(&ok);
+        if (!ok || limit < 0) {
+            return error(400, QStringLiteral("bad size"));
+        }
+    }
+    const QJsonObject boards = buildLeaderboards(*storage_, limit);
+    if (boards.contains("error")) {
+        return error(500, QStringLiteral("storage error"));
+    }
+    return json(200, boards);
 }

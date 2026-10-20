@@ -157,11 +157,9 @@ QWidget* EventEditor::table(const char* keyA, const char* keyB, const QString& h
 }
 
 EventEditor::EventEditor(QWidget* parent) : QWidget(parent) {
-    const QString tenths = tr("Rates and EXP are in tenths: 15 means x1.5.");
-
     Names enemies;
     for (int i = 0; i < Catalog::raidEnemies().size(); ++i) {
-        enemies.append({i, Catalog::raidEnemies()[i] + QStringLiteral(" ?")});
+        enemies.append({i, Catalog::raidEnemies()[i]});
     }
     Names shop;
     for (const Catalog::NamedId& item : Catalog::shopItems()) {
@@ -170,7 +168,7 @@ EventEditor::EventEditor(QWidget* parent) : QWidget(parent) {
 
     auto* subjugation = new QVBoxLayout;
     subjugation->addWidget(table("subjugation_enemy_id", "subjugation_exp", tr("Enemy ID"),
-                                 tr("EXP (tenths)"), 20, false, U8Max, I32Max, enemies));
+                                 tr("Bonus (tenths of %)"), 20, false, U8Max, I32Max, enemies));
 
     auto* weekend = new QFormLayout;
     weekend->addRow(tr("Type"), scalar("weekend_type", U8Max));
@@ -199,22 +197,37 @@ EventEditor::EventEditor(QWidget* parent) : QWidget(parent) {
     auto* grid = new QGridLayout(this);
     grid->setContentsMargins(0, 0, 0, 0);
     grid->addWidget(group(tr("Subjugation"), subjugation,
-                          tr("Bonus EXP for defeating these enemies. Enemy IDs are not mapped yet: "
-                             "the names are the "
-                             "Raid enemy list order, a guess (marked ?).") +
-                              ' ' + tenths),
+                          tr("Bonus on the kill EXP of these enemies: each kill gives EXP x (100 + "
+                             "bonus / 10) / 100, fractions "
+                             "dropped, at most +500 % (5000); 1000 doubles it. The results screen "
+                             "adds the kills to accuracy, "
+                             "clear time and damage, so a clear gains much less than the bonus "
+                             "(Stage 1: +500 % on Oozes took a "
+                             "clear from about 390 to 515 EXP); a run that ends early gains almost "
+                             "all of it. IDs 0-19 are the "
+                             "enemy models shown; 0 is confirmed as the Ooze.")),
                     0, 0, 3, 1);
     grid->addWidget(group(tr("Weekend shop"), weekend,
-                          tr("Shop discount and item prices. Items are named from the Raid shop "
-                             "list; that the event uses "
-                             "these IDs is not confirmed yet.")),
+                          tr("Type 1-5, anything else is ignored. Types 1, 3 and 5 use the "
+                             "discount rate (tenths), "
+                             "types 2 and 4 the item list. Items are named from the Raid shop "
+                             "list; untested in game.")),
                     0, 1, 3, 1);
-    grid->addWidget(group(tr("Participation event"), participate), 0, 2);
-    grid->addWidget(group(tr("Special event"), special, tenths), 1, 2);
-    grid->addWidget(group(tr("Discount event"), discount), 2, 2);
-    grid->addWidget(group(tr("Collaboration wanted"), collaboration,
-                          tr("Names: ASCII, at most 15 characters.")),
-                    3, 0, 1, 3);
+    grid->addWidget(group(tr("Participation event"), participate,
+                          tr("Event ID 1-5, kept with its serial. Effect not known yet.")),
+                    0, 2);
+    grid->addWidget(group(tr("Special event"), special,
+                          tr("Event ID 1-9: 1-3 use the EXP rate, 8 the Wanted rate, 9 both, 4-7 "
+                             "neither. Rates in "
+                             "tenths: 20 means x2. Untested in game.")),
+                    1, 2);
+    grid->addWidget(group(tr("Discount event"), discount,
+                          tr("Event ID 1 or 2, with an EXP rate in tenths. Untested in game.")),
+                    2, 2);
+    grid->addWidget(
+        group(tr("Collaboration wanted"), collaboration,
+              tr("Names for Wanted enemies: ASCII, at most 15 characters. Untested in game.")),
+        3, 0, 1, 3);
     grid->setRowStretch(4, 1);
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
