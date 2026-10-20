@@ -9,10 +9,18 @@
 
 class JsonWriter {
 public:
-    JsonWriter& beginObject() { return open('{'); }
-    JsonWriter& endObject() { return close('}'); }
-    JsonWriter& beginArray() { return open('['); }
-    JsonWriter& endArray() { return close(']'); }
+    JsonWriter& beginObject() {
+        return open('{');
+    }
+    JsonWriter& endObject() {
+        return close('}');
+    }
+    JsonWriter& beginArray() {
+        return open('[');
+    }
+    JsonWriter& endArray() {
+        return close(']');
+    }
 
     JsonWriter& key(const QString& name) {
         separate();
@@ -40,9 +48,13 @@ public:
         return *this;
     }
 
-    JsonWriter& value(const char* v) { return value(QString::fromUtf8(v)); }
+    JsonWriter& value(const char* v) {
+        return value(QString::fromUtf8(v));
+    }
 
-    const QByteArray& data() const { return out_; }
+    const QByteArray& data() const {
+        return out_;
+    }
 
 private:
     JsonWriter& open(char c) {
