@@ -4,7 +4,7 @@ version = 1
 path = [
     "REUSE.toml",
     "CMakeSettings.json",
-    ".github/workflows/*.*",
+    ".github/*.*",
     ".gitignore",
     "config.example.json",
     "cmake/build_info.cmake",
