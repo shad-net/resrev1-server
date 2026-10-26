@@ -7,9 +7,9 @@
 
 namespace Revelations {
 
-QString version(); 
-QString commit();         
-QString buildTimestamp(); 
+QString version();
+QString commit();
+QString buildTimestamp();
 QString versionLine(const QString& program);
 
 } // namespace Revelations
