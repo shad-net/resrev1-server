@@ -38,7 +38,7 @@ struct Counter {
 constexpr Counter Counters[] = {
     {"level", 0x1dc4},         {"exp_total", 0x1dc8},
     {"enemies_total", 0x1dcc}, {"clear_time_total", 0x1dd4},
-    {"runs_total", 0x1334},
+    {"counter_1334", 0x1334},
 };
 
 // Raid runs per character
@@ -131,7 +131,6 @@ QJsonObject decodeUpload(const QByteArray& d) {
     for (const Counter& c : Counters) {
         totals.insert(c.name, qint64(u32(d, c.offset)));
     }
-    out.insert("totals", totals);
 
     QJsonArray characterRuns;
     for (int i = 0; i < CharacterCount; ++i) {
@@ -142,10 +141,13 @@ QJsonObject decodeUpload(const QByteArray& d) {
         }
     }
     out.insert("character_runs", characterRuns);
+    qint64 runs = 0;
+    for (int i = 0; i < CharacterCount; ++i) {
+        runs += u32(d, CharacterRunsOffset + i * 4);
+    }
+    totals.insert("runs_total", runs);
+    out.insert("totals", totals);
 
-    // Wanted enemies met: 255 entries of 0x28 bytes from 0x1DE0, each a running number (the
-    // oldest is replaced when the list is full), the UTF-16 name shown on the enemy (16
-    // characters), a u16 and the enemy kind as a subjugation ID.
     QJsonArray wanted;
     for (int i = 0; i < 255; ++i) {
         const qsizetype o = WantedOffset + i * WantedSize;
