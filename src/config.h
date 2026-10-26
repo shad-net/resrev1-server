@@ -22,6 +22,7 @@ struct Reward {
     QStringList players;
     std::optional<TimeWindow> window;
     static constexpr qint64 WeeklySerials = 1000;
+
     qint64 lastSerial() const {
         return window && window->weekly ? serial + WeeklySerials - 1 : serial;
     }
@@ -56,6 +57,8 @@ struct ServerConfig {
     QString adminKey;
     QString logFile;
     qint64 logMaxBytes = 10 * 1024 * 1024;
+    bool trace = false;
+    qint64 traceBodyBytes = 4096;
     bool leaderboardsPublic = false;
     int leaderboardSize = 10;
     QVector<Reward> rewards;

@@ -377,6 +377,13 @@ std::optional<ServerConfig> loadConfig(const QByteArray& json, QString* error) {
             return std::nullopt;
         }
     }
+    if (root.contains("identity") &&
+        root.value("identity").toString() != QLatin1String("shadnet")) {
+        fail(error,
+             QStringLiteral(
+                 "\"identity\" was removed: players are always shadNet accounts; delete the key"));
+        return std::nullopt;
+    }
     const QJsonObject shadnet = root.value("shadnet").toObject();
     config.shadnetUrl = shadnet.value("url").toString();
     while (config.shadnetUrl.endsWith('/')) {
@@ -416,6 +423,19 @@ std::optional<ServerConfig> loadConfig(const QByteArray& json, QString* error) {
             return std::nullopt;
         }
         config.logMaxBytes = mb * 1024 * 1024;
+    }
+    if (log.contains("trace")) {
+        if (!log.value("trace").isBool()) {
+            fail(error, QStringLiteral("log.trace must be true or false"));
+            return std::nullopt;
+        }
+        config.trace = log.value("trace").toBool();
+    }
+    if (log.contains("trace_body_bytes")) {
+        if (!readInt(log.value("trace_body_bytes"), 0, 16 * 1024 * 1024, &config.traceBodyBytes)) {
+            fail(error, QStringLiteral("log.trace_body_bytes must be 0..16777216"));
+            return std::nullopt;
+        }
     }
     const QJsonValue boards = root.value("leaderboards");
     if (!boards.isUndefined() && !boards.isObject()) {
@@ -463,7 +483,7 @@ QByteArray defaultConfigJson() {
     "database": "revelations.sqlite",
     "shadnet": { "url": "http://127.0.0.1:31315" },
     "admin": { "address": "127.0.0.1", "port": 8081, "key": "@KEY@" },
-    "log": { "file": "revelations.log", "max_size_mb": 10 },
+    "log": { "file": "revelations.log", "max_size_mb": 10, "trace": false, "trace_body_bytes": 4096 },
     "leaderboards": { "public": true, "size": 10 },
     "rewards": [],
     "event": {}

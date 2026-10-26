@@ -8,6 +8,7 @@
 #include "leaderboard.h"
 #include "revelations_service.h"
 #include "storage.h"
+#include "traffic.h"
 #include "upload_decoder.h"
 #include "version.h"
 
@@ -59,6 +60,21 @@ std::optional<qint64> parseId(const QString& text) {
     bool ok = false;
     const qint64 v = text.toLongLong(&ok);
     return ok && v > 0 ? std::optional<qint64>(v) : std::nullopt;
+}
+
+QJsonObject trafficJson(const TrafficEntry& e, bool bodies) {
+    QJsonObject o{
+        {"id", qint64(e.id)}, {"time", e.time},         {"method", e.method},
+        {"path", e.path},     {"endpoint", e.endpoint}, {"peer", e.peer},
+        {"player", e.player}, {"status", e.status},     {"result", e.result},
+        {"ms", e.elapsedMs},  {"bytes_in", e.bytesIn},  {"bytes_out", e.bytesOut},
+    };
+    if (bodies) {
+        o.insert("headers", e.headers);
+        o.insert("request", e.request);
+        o.insert("response", e.response);
+    }
+    return o;
 }
 
 } // namespace
@@ -176,6 +192,15 @@ HttpResponse AdminService::route(const HttpRequest& request) {
             return setSchedule(request.body);
         }
     }
+    if (what == QLatin1String("traffic") && m == "GET") {
+        if (parts.size() == 2) {
+            return traffic(request.query.queryItemValue(QStringLiteral("after")));
+        }
+        if (parts.size() == 3) {
+            const auto id = parseId(parts[2]);
+            return id ? trafficEntry(*id) : error(400, QStringLiteral("bad id"));
+        }
+    }
     if (what == QLatin1String("leaderboards") && parts.size() == 2 && m == "GET") {
         return leaderboards(request.query.queryItemValue(QStringLiteral("size")));
     }
@@ -197,6 +222,29 @@ HttpResponse AdminService::route(const HttpRequest& request) {
     return error(404, QStringLiteral("not found"));
 }
 
+HttpResponse AdminService::traffic(const QString& after) {
+    bool ok = true;
+    const quint64 from = after.isEmpty() ? 0 : after.toULongLong(&ok);
+    if (!ok) {
+        return error(400, QStringLiteral("bad after"));
+    }
+    QJsonArray entries;
+    for (const TrafficEntry& e : Traffic::since(from)) {
+        entries.append(trafficJson(e, false));
+    }
+    return json(200, QJsonObject{{"entries", entries}, {"last", qint64(Traffic::lastId())}});
+}
+
+HttpResponse AdminService::trafficEntry(qint64 id) {
+    const auto e = Traffic::find(quint64(id));
+    if (!e) {
+        return error(
+            404,
+            QStringLiteral("no such request (only the last %1 are kept)").arg(Traffic::MaxEntries));
+    }
+    return json(200, trafficJson(*e, true));
+}
+
 HttpResponse AdminService::status() {
     const ServerConfig& c = service_->config();
     const auto list = storage_->players();
@@ -212,6 +260,8 @@ HttpResponse AdminService::status() {
                          {"config_rewards", qint64(c.rewards.size())},
                          {"admin_rewards", qint64(service_->storedRewards().size())},
                          {"event_source", service_->currentEvent().source},
+                         {"requests", qint64(Traffic::lastId())},
+                         {"trace", c.trace},
                      });
 }
 

@@ -11,10 +11,12 @@
 #include "stats_dialog.h"
 #include "version.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -24,12 +26,16 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
 
@@ -149,6 +155,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_->addTab(buildEventTab(), tr("Event"));
     tabs_->addTab(buildScheduleTab(), tr("Schedule"));
     tabs_->addTab(buildLeaderboardTab(), tr("Leaderboards"));
+    tabs_->addTab(buildTrafficTab(), tr("Traffic"));
+    tabs_->setCurrentIndex(settings.value("tab", 0).toInt());
+    connect(tabs_, &QTabWidget::currentChanged, this,
+            [](int index) { QSettings().setValue("tab", index); });
 
     auto* central = new QWidget;
     auto* layout = new QVBoxLayout(central);
@@ -227,6 +237,183 @@ QWidget* MainWindow::buildRewardsTab() {
     connect(addReward_, &QPushButton::clicked, this, [this] { addReward({}); });
     connect(deleteReward_, &QPushButton::clicked, this, &MainWindow::deleteReward);
     return w;
+}
+
+QWidget* MainWindow::buildTrafficTab() {
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    auto* options = new QHBoxLayout;
+    liveTraffic_ = new QCheckBox(tr("Live"));
+    liveTraffic_->setChecked(true);
+    errorsOnly_ = new QCheckBox(tr("Errors only"));
+    errorsOnly_->setToolTip(tr("Status 400 and up, or a \"result\":\"NG\" answer"));
+    trafficFilter_ = new QLineEdit;
+    trafficFilter_->setPlaceholderText(tr("Filter by player or endpoint"));
+    trafficFilter_->setClearButtonEnabled(true);
+    auto* clear = new QPushButton(tr("Clear view"));
+    options->addWidget(liveTraffic_);
+    options->addWidget(errorsOnly_);
+    options->addWidget(trafficFilter_, 1);
+    options->addWidget(clear);
+    layout->addLayout(options);
+
+    trafficTable_ = makeTable({tr("#"), tr("Time"), tr("Player"), tr("Endpoint"), tr("Status"),
+                               tr("Result"), tr("ms"), tr("In"), tr("Out"), tr("Path")});
+    trafficTable_->setSortingEnabled(false);
+    for (int c : {0, 1, 4, 5, 6, 7, 8}) {
+        trafficTable_->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+    }
+    trafficTable_->setColumnWidth(2, 140);
+    trafficTable_->setColumnWidth(3, 110);
+    trafficRequest_ = new QPlainTextEdit;
+    trafficResponse_ = new QPlainTextEdit;
+    for (QPlainTextEdit* edit : {trafficRequest_, trafficResponse_}) {
+        edit->setReadOnly(true);
+        edit->setLineWrapMode(QPlainTextEdit::NoWrap);
+        edit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    }
+    auto* request = new QGroupBox(tr("Request (decrypted)"));
+    (new QVBoxLayout(request))->addWidget(trafficRequest_);
+    auto* response = new QGroupBox(tr("Response (decrypted)"));
+    (new QVBoxLayout(response))->addWidget(trafficResponse_);
+    auto* bodies = new QSplitter(Qt::Horizontal);
+    bodies->addWidget(request);
+    bodies->addWidget(response);
+    auto* split = new QSplitter(Qt::Vertical);
+    split->addWidget(trafficTable_);
+    split->addWidget(bodies);
+    split->setStretchFactor(0, 3);
+    split->setStretchFactor(1, 2);
+    layout->addWidget(split, 1);
+    trafficNote_ =
+        new QLabel(tr("The server keeps the last 1000 requests in memory. Turn on log.trace in "
+                      "config.json to also write them to the log."));
+    trafficNote_->setWordWrap(true);
+    layout->addWidget(trafficNote_);
+
+    trafficTimer_ = new QTimer(this);
+    trafficTimer_->setInterval(2000);
+    connect(trafficTimer_, &QTimer::timeout, this, &MainWindow::refreshTraffic);
+    trafficTimer_->start();
+    connect(liveTraffic_, &QCheckBox::toggled, this, [this](bool on) {
+        if (on) {
+            refreshTraffic();
+            trafficTimer_->start();
+        } else {
+            trafficTimer_->stop();
+        }
+    });
+    connect(clear, &QPushButton::clicked, this, [this] {
+        trafficTable_->setRowCount(0);
+        trafficRequest_->clear();
+        trafficResponse_->clear();
+    });
+    connect(errorsOnly_, &QCheckBox::toggled, this, &MainWindow::filterTraffic);
+    connect(trafficFilter_, &QLineEdit::textChanged, this, &MainWindow::filterTraffic);
+    connect(trafficTable_, &QTableWidget::itemSelectionChanged, this,
+            &MainWindow::showTrafficEntry);
+    return page;
+}
+
+void MainWindow::filterTraffic() {
+    const QString text = trafficFilter_->text().trimmed();
+    for (int row = 0; row < trafficTable_->rowCount(); ++row) {
+        const bool error = trafficTable_->item(row, 4)->text().toInt() >= 400 ||
+                           trafficTable_->item(row, 5)->text() == QLatin1String("NG");
+        const bool match =
+            text.isEmpty() ||
+            trafficTable_->item(row, 2)->text().contains(text, Qt::CaseInsensitive) ||
+            trafficTable_->item(row, 3)->text().contains(text, Qt::CaseInsensitive);
+        trafficTable_->setRowHidden(row, (errorsOnly_->isChecked() && !error) || !match);
+    }
+}
+
+void MainWindow::refreshTraffic() {
+    if (trafficBusy_ || !api_.configured() || server_->text().isEmpty()) {
+        return;
+    }
+    trafficBusy_ = true;
+    api_.get(QStringLiteral("/api/traffic?after=%1").arg(lastTrafficId_),
+             [this](const ApiClient::Reply& r) {
+                 trafficBusy_ = false;
+                 if (!r.ok()) {
+                     return; // the next poll tries again; Connect reports a lost server
+                 }
+                 const QJsonObject reply = r.json().object();
+                 // A restarted server counts from 1 again.
+                 if (quint64(reply.value("last").toInteger()) < lastTrafficId_) {
+                     lastTrafficId_ = 0;
+                     trafficTable_->setRowCount(0);
+                     refreshTraffic();
+                     return;
+                 }
+                 const bool atBottom = trafficTable_->verticalScrollBar()->value() ==
+                                       trafficTable_->verticalScrollBar()->maximum();
+                 for (const QJsonValue& v : reply.value("entries").toArray()) {
+                     const QJsonObject e = v.toObject();
+                     const int row = trafficTable_->rowCount();
+                     trafficTable_->insertRow(row);
+                     const int status = e.value("status").toInt();
+                     const QStringList cells = {
+                         QString::number(e.value("id").toInteger()),
+                         QDateTime::fromMSecsSinceEpoch(e.value("time").toInteger())
+                             .toString(QStringLiteral("hh:mm:ss")),
+                         e.value("player").toString().isEmpty() ? e.value("peer").toString()
+                                                                : e.value("player").toString(),
+                         e.value("endpoint").toString(),
+                         QString::number(status),
+                         e.value("result").toString(),
+                         QString::number(e.value("ms").toInteger()),
+                         QString::number(e.value("bytes_in").toInteger()),
+                         QString::number(e.value("bytes_out").toInteger()),
+                         e.value("path").toString(),
+                     };
+                     for (int c = 0; c < cells.size(); ++c) {
+                         auto* item = new QTableWidgetItem(cells[c]);
+                         if (status >= 400 || e.value("result").toString() == QLatin1String("NG")) {
+                             item->setForeground(QColor(0xc0, 0x39, 0x2b));
+                         }
+                         trafficTable_->setItem(row, c, item);
+                     }
+                     lastTrafficId_ = std::max(lastTrafficId_, quint64(e.value("id").toInteger()));
+                 }
+                 while (trafficTable_->rowCount() > 2000) {
+                     trafficTable_->removeRow(0);
+                 }
+                 filterTraffic();
+                 if (atBottom) {
+                     trafficTable_->scrollToBottom();
+                 }
+             });
+}
+
+void MainWindow::showTrafficEntry() {
+    const auto rows = trafficTable_->selectionModel()->selectedRows();
+    if (rows.isEmpty()) {
+        return;
+    }
+    const QString id = trafficTable_->item(rows.first().row(), 0)->text();
+    api_.get(QStringLiteral("/api/traffic/") + id, [this, id](const ApiClient::Reply& r) {
+        if (!r.ok()) {
+            trafficRequest_->setPlainText(
+                r.status == 404 ? tr("Request %1 is no longer kept by the server.").arg(id)
+                                : r.error);
+            trafficResponse_->clear();
+            return;
+        }
+        const QJsonObject e = r.json().object();
+        // JSON bodies arrive compact; show them indented.
+        const auto pretty = [](const QString& text) {
+            const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
+            return doc.isNull() ? text
+                                : QString::fromUtf8(doc.toJson(QJsonDocument::Indented)).trimmed();
+        };
+        const QString request = pretty(e.value("request").toString());
+        trafficRequest_->setPlainText(e.value("headers").toString() + QStringLiteral("\n\n") +
+                                      (request.isEmpty() ? tr("(no body)") : request));
+        const QString response = pretty(e.value("response").toString());
+        trafficResponse_->setPlainText(response.isEmpty() ? tr("(no body)") : response);
+    });
 }
 
 QWidget* MainWindow::buildLeaderboardTab() {
@@ -656,7 +843,10 @@ void MainWindow::connectToServer() {
             tr("Server built %1\nAdmin app: %2")
                 .arg(s.value("build_timestamp").toString(),
                      Revelations::versionLine(QStringLiteral("revelations-admin"))));
+        lastTrafficId_ = 0;
+        trafficTable_->setRowCount(0);
         refresh();
+        refreshTraffic();
     });
 }
 

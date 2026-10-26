@@ -9,7 +9,10 @@
 #include <QJsonObject>
 #include <QMainWindow>
 
+class QCheckBox;
 class QComboBox;
+class QPlainTextEdit;
+class QTimer;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -21,8 +24,6 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
-
-    // Fills the connection fields and connects (used by the command line).
     void connectTo(const QString& url, const QString& key);
 
 private:
@@ -31,6 +32,10 @@ private:
     QWidget* buildEventTab();
     QWidget* buildLeaderboardTab();
     QWidget* buildScheduleTab();
+    QWidget* buildTrafficTab();
+    void refreshTraffic();
+    void showTrafficEntry();
+    void filterTraffic();
     void showSchedule(const QJsonObject& reply);
     void editScheduleEntry(bool add);
     void deleteScheduleEntry();
@@ -95,4 +100,15 @@ private:
     QPushButton* clearEvent_;
     QPushButton* revertEvent_;
     QJsonObject eventReply_;
+
+    QTableWidget* trafficTable_;
+    QCheckBox* liveTraffic_;
+    QCheckBox* errorsOnly_;
+    QLineEdit* trafficFilter_;
+    QPlainTextEdit* trafficRequest_;
+    QPlainTextEdit* trafficResponse_;
+    QLabel* trafficNote_;
+    QTimer* trafficTimer_;
+    quint64 lastTrafficId_ = 0;
+    bool trafficBusy_ = false;
 };

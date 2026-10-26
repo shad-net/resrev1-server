@@ -6,8 +6,10 @@
 #include "blowfish.h"
 #include "json_writer.h"
 #include "leaderboard.h"
+#include "traffic.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -33,6 +35,31 @@ QByteArray stripNulPadding(QByteArray data) {
         data.chop(1);
     }
     return data;
+}
+
+const QStringList& gameEndpoints() {
+    static const QStringList endpoints = {"reguc.php", "reudw.php", "regrw.php", "redrw.php",
+                                          "regev.php"};
+    return endpoints;
+}
+
+QString headerLines(const HttpRequest& request) {
+    QList<QByteArray> names = request.headers.keys();
+    std::sort(names.begin(), names.end());
+    QStringList lines;
+    for (const QByteArray& name : names) {
+        QString value = QString::fromLatin1(request.headers.value(name));
+        if (name == "x-np-authcode") {
+            const qsizetype comma = value.indexOf(',');
+            const QString code = comma < 0 ? value : value.left(comma);
+            if (code.size() > 6) {
+                value = code.left(4) + QStringLiteral("...") +
+                        (comma < 0 ? QString() : value.mid(comma));
+            }
+        }
+        lines << QString::fromLatin1(name) + QStringLiteral(": ") + value;
+    }
+    return lines.join('\n');
 }
 
 } // namespace
@@ -75,13 +102,58 @@ void RevelationsService::mergeRewards() {
     }
 }
 
-void RevelationsService::handle(const HttpRequest& request, HttpServer::Responder respond) {
+void RevelationsService::handle(const HttpRequest& request, HttpServer::Responder reply) {
     QString path = request.path;
     if (!config_.basePath.isEmpty() && path.startsWith(config_.basePath + '/')) {
         path = path.mid(config_.basePath.size());
     }
     const QString endpoint = path.section('/', -1);
     const QString ip = peerString(request.peer);
+
+    const bool game = gameEndpoints().contains(endpoint);
+    auto entry = std::make_shared<TrafficEntry>();
+    entry->id = Traffic::nextId();
+    entry->time = QDateTime::currentMSecsSinceEpoch();
+    entry->method = QString::fromLatin1(request.method);
+    entry->path =
+        request.path + (request.query.isEmpty() ? QString() : '?' + request.query.toString());
+    entry->endpoint = game ? endpoint
+                      : request.path.startsWith(QLatin1String("/leaderboards"))
+                          ? QStringLiteral("leaderboards")
+                          : endpoint;
+    entry->peer = ip;
+    entry->headers = headerLines(request);
+    entry->bytesIn = request.body.size();
+    QByteArray requestPlain = request.body;
+    if (game && !request.body.isEmpty()) {
+        const auto plain = cipher_->decrypt(request.body);
+        requestPlain =
+            plain ? *plain : QByteArrayLiteral("(not a whole number of Blowfish blocks)");
+    }
+    entry->request = Traffic::keep(requestPlain);
+    QElapsedTimer timer;
+    timer.start();
+    const HttpServer::Responder respond = [this, entry, timer, game, reply,
+                                           requestPlain](HttpResponse response) {
+        entry->status = response.status;
+        entry->elapsedMs = timer.elapsed();
+        entry->bytesOut = response.body.size();
+        QByteArray responsePlain = response.body;
+        if (game && response.status == 200 && !response.body.isEmpty()) {
+            if (const auto plain = cipher_->decrypt(response.body)) {
+                responsePlain = *plain;
+                entry->result = Traffic::resultOf(*plain);
+            }
+        } else if (response.contentType.startsWith("text/html")) {
+            responsePlain = QStringLiteral("(%1-byte web page)").arg(response.body.size()).toUtf8();
+        }
+        entry->response = Traffic::keep(responsePlain);
+        Traffic::record(*entry);
+        if (config_.trace) {
+            Traffic::trace(*entry, requestPlain, responsePlain, config_.traceBodyBytes);
+        }
+        reply(std::move(response));
+    };
 
     if (config_.leaderboardsPublic && request.method == "GET" &&
         (request.path == QLatin1String("/leaderboards") ||
@@ -94,9 +166,7 @@ void RevelationsService::handle(const HttpRequest& request, HttpServer::Responde
         return;
     }
 
-    static const QStringList endpoints = {"reguc.php", "reudw.php", "regrw.php", "redrw.php",
-                                          "regev.php"};
-    if (!endpoints.contains(endpoint)) {
+    if (!game) {
         qCInfo(lcService).noquote() << request.method << request.path << "from" << ip << "-> 404";
         HttpResponse notFound;
         notFound.status = 404;
@@ -110,6 +180,8 @@ void RevelationsService::handle(const HttpRequest& request, HttpServer::Responde
     const qsizetype comma = header.indexOf(',');
     const QString code = QString::fromLatin1(comma < 0 ? header : header.left(comma)).trimmed();
     const bool placeholder = code.isEmpty() || code == QLatin1String("AUTHEN");
+
+    // Every player is a shadNet account: requests without a real code are refused.
     if (placeholder) {
         qCWarning(lcService).noquote()
             << endpoint << "from" << ip << "rejected: no shadNet authorization code";
@@ -117,8 +189,8 @@ void RevelationsService::handle(const HttpRequest& request, HttpServer::Responde
         return;
     }
 
-    verifier_.verify(code, [this, endpoint, request, ip,
-                            respond](const ShadNetVerifier::Result& result) {
+    verifier_.verify(code, [this, endpoint, request, ip, respond,
+                            entry](const ShadNetVerifier::Result& result) {
         switch (result.status) {
         case ShadNetVerifier::Status::Verified:
             if (result.clientId != QLatin1String(ShadNetVerifier::GameClientId)) {
@@ -126,6 +198,7 @@ void RevelationsService::handle(const HttpRequest& request, HttpServer::Responde
                                QStringLiteral("authorization code is for another client")));
                 return;
             }
+            entry->player = result.onlineId;
             serve(endpoint, request, QStringLiteral("account:") + result.accountId, result.onlineId,
                   respond);
             return;
@@ -425,6 +498,7 @@ HttpResponse RevelationsService::leaderboards(bool json) {
         boards_ = {};
         return response;
     }
+
     QJsonObject page = boards_;
     page.insert("event", eventInfo(3));
     if (json) {

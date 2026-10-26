@@ -1,5 +1,5 @@
 {
-    "_note": "Keys starting with _ are ignored. See the README for the reward values tested in game. Event values are untested placeholders.",
+    "_note": "Keys starting with _ are ignored",
     "listen": {
         "address": "0.0.0.0",
         "port": 8080
@@ -16,7 +16,13 @@
     },
     "log": {
         "file": "revelations.log",
-        "max_size_mb": 10
+        "max_size_mb": 10,
+        "trace": false,
+        "trace_body_bytes": 4096
+    },
+    "leaderboards": {
+        "public": true,
+        "size": 10
     },
     "rewards": [
         {
@@ -45,17 +51,16 @@
             "weapon_randomtag": true
         }
     ],
+    "event_schedule": [],
     "event": {
         "subjugation_enemy_id": [
-            3,
-            5
+            0
         ],
         "subjugation_exp": [
-            15,
-            20
+            1000
         ],
         "weekend_type": 1,
-        "weekend_discount_rate": 5,
+        "weekend_discount_rate": 500,
         "weekend_item_item_id": [
             4
         ],
@@ -65,11 +70,11 @@
         "participate_serial_id": 77,
         "participate_event_id": 2,
         "special_serial_id": 88,
-        "special_event_id": 3,
-        "special_exp_rate": 20,
-        "special_wanted_rate": 15,
+        "special_event_id": 1,
+        "special_exp_rate": 1000,
+        "special_wanted_rate": 0,
         "discount_event_id": 1,
-        "discount_exp_rate": 10,
+        "discount_exp_rate": 800,
         "collaboration_wanted_name": [
             "HUNK",
             "JILL"

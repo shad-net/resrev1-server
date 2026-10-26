@@ -51,6 +51,8 @@ add_executable(resrev1srv
     src/event_schedule.h
     src/time_window.cpp
     src/time_window.h
+    src/traffic.cpp
+    src/traffic.h
 )
 
 target_link_libraries(resrev1srv PRIVATE Qt6::Core Qt6::Network Qt6::Sql revelations_version)

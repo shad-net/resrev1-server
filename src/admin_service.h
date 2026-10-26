@@ -31,6 +31,8 @@ private:
     HttpResponse setEvent(const QByteArray& body);
     HttpResponse clearEvent();
     HttpResponse leaderboards(const QString& size);
+    HttpResponse traffic(const QString& after);
+    HttpResponse trafficEntry(qint64 id);
     HttpResponse schedule();
     HttpResponse setSchedule(const QByteArray& body);
 
