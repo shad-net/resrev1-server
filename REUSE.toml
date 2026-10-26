@@ -5,6 +5,7 @@ path = [
     "REUSE.toml",
     "CMakeSettings.json",
     ".github/*.*",
+    ".github/workflows/*.*",
     ".gitignore",
     "config.example.json",
     "cmake/build_info.cmake",
