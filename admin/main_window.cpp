@@ -9,6 +9,7 @@
 #include "reward_dialog.h"
 #include "schedule_dialog.h"
 #include "stats_dialog.h"
+#include "version.h"
 
 #include <QComboBox>
 #include <QDateTime>
@@ -113,7 +114,7 @@ QString playerTarget(const QJsonObject& p) {
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle(tr("Revelations Admin"));
+    setWindowTitle(tr("Revelations Admin %1").arg(Revelations::version()));
 
     QSettings settings;
     url_ = new QLineEdit(settings.value("url", QStringLiteral("http://127.0.0.1:8081")).toString());
@@ -635,10 +636,26 @@ void MainWindow::connectToServer() {
             return;
         }
         const QJsonObject s = r.json().object();
-        server_->setText(tr("Game server %1%2  ·  shadNet %3  ·  up %4 min")
+        // Servers from before version reporting send "1.0" without a commit.
+        const QString serverVersion = s.value("version").toString();
+        const QString serverCommit = s.value("commit").toString();
+        QString versions = tr("server %1").arg(serverVersion);
+        if (!serverCommit.isEmpty()) {
+            versions += QStringLiteral(" (%1)").arg(serverCommit);
+        }
+        if (serverVersion != Revelations::version()) {
+            versions += tr(", this admin app is %1: some features may not match")
+                            .arg(Revelations::version());
+        }
+        server_->setText(tr("Game server %1%2  ·  shadNet %3  ·  up %4 min  ·  %5")
                              .arg(s.value("listen").toString(), s.value("base_path").toString(),
                                   s.value("shadnet_url").toString())
-                             .arg(s.value("uptime").toInteger() / 60));
+                             .arg(s.value("uptime").toInteger() / 60)
+                             .arg(versions));
+        server_->setToolTip(
+            tr("Server built %1\nAdmin app: %2")
+                .arg(s.value("build_timestamp").toString(),
+                     Revelations::versionLine(QStringLiteral("revelations-admin"))));
         refresh();
     });
 }

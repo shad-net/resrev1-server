@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "main_window.h"
+#include "version.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -10,7 +11,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("revelations-server"));
     QApplication::setApplicationName(QStringLiteral("revelations-admin"));
-    QApplication::setApplicationVersion(QStringLiteral("1.0"));
+    QApplication::setApplicationVersion(Revelations::version());
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Admin client for revelations-server."));

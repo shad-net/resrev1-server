@@ -9,6 +9,7 @@
 #include "revelations_service.h"
 #include "storage.h"
 #include "upload_decoder.h"
+#include "version.h"
 
 #include <QCryptographicHash>
 #include <QJsonArray>
@@ -200,7 +201,9 @@ HttpResponse AdminService::status() {
     const ServerConfig& c = service_->config();
     const auto list = storage_->players();
     return json(200, QJsonObject{
-                         {"version", QStringLiteral("1.0")},
+                         {"version", Revelations::version()},
+                         {"commit", Revelations::commit()},
+                         {"build_timestamp", Revelations::buildTimestamp()},
                          {"uptime", uptime_.elapsed() / 1000},
                          {"listen", QStringLiteral("%1:%2").arg(c.address.toString()).arg(c.port)},
                          {"base_path", c.basePath},

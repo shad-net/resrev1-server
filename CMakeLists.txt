@@ -2,13 +2,26 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 cmake_minimum_required(VERSION 3.19)
-project(resrev1srv VERSION 1.0 LANGUAGES CXX)
+project(resrev1srv VERSION 0.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Network Sql)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Network Sql)
+
+set(BUILD_INFO_DIR "${CMAKE_CURRENT_BINARY_DIR}/build_info")
+add_custom_target(revelations_build_info
+    COMMAND "${CMAKE_COMMAND}" "-DOUT=${BUILD_INFO_DIR}/build_info.h" "-DSRC=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake"
+    BYPRODUCTS "${BUILD_INFO_DIR}/build_info.h"
+    COMMENT "Stamping the build time and commit"
+    VERBATIM)
+add_library(revelations_version STATIC src/version.cpp src/version.h)
+add_dependencies(revelations_version revelations_build_info)
+target_include_directories(revelations_version PUBLIC src PRIVATE "${BUILD_INFO_DIR}")
+target_compile_definitions(revelations_version PRIVATE REVELATIONS_VERSION="${PROJECT_VERSION}")
+target_link_libraries(revelations_version PUBLIC Qt6::Core)
 
 add_executable(resrev1srv
     src/admin_service.cpp
@@ -40,7 +53,7 @@ add_executable(resrev1srv
     src/time_window.h
 )
 
-target_link_libraries(resrev1srv PRIVATE Qt6::Core Qt6::Network Qt6::Sql)
+target_link_libraries(resrev1srv PRIVATE Qt6::Core Qt6::Network Qt6::Sql revelations_version)
 
 if(MSVC)
     target_compile_options(resrev1srv PRIVATE /W4 /permissive-)
@@ -92,7 +105,7 @@ if(REVELATIONS_BUILD_ADMIN)
             admin/window_editor.cpp
             admin/window_editor.h
         )
-        target_link_libraries(revelations-admin PRIVATE Qt6::Widgets Qt6::Network)
+        target_link_libraries(revelations-admin PRIVATE Qt6::Widgets Qt6::Network revelations_version)
         if(MSVC)
             target_compile_options(revelations-admin PRIVATE /W4 /permissive-)
         else()

@@ -7,6 +7,7 @@
 #include "http_server.h"
 #include "revelations_service.h"
 #include "storage.h"
+#include "version.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -47,8 +48,10 @@ int fatal(const QString& message) {
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("revelations-server"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("1.0"));
+    QCoreApplication::setApplicationVersion(Revelations::version());
     qSetMessagePattern(QStringLiteral("%{time yyyy-MM-dd hh:mm:ss} [%{type}] %{message}"));
+    const QString versionLine = Revelations::versionLine(QStringLiteral("revelations-server"));
+    qInfo("%s", qPrintable(versionLine));
 
     // config.json in the working directory, created with defaults on the first run.
     const QString configPath = QStringLiteral("config.json");
@@ -76,6 +79,7 @@ int main(int argc, char* argv[]) {
         }
         qInfo("logging to %s (rewritten at %lld MB)", qPrintable(logPath),
               static_cast<long long>(config->logMaxBytes / (1024 * 1024)));
+        qInfo("%s", qPrintable(versionLine)); // the first line only reached the console
     }
     const QString dbPath = QDir(configDir).absoluteFilePath(config->database);
     Storage storage;
