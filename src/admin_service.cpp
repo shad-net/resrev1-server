@@ -45,7 +45,6 @@ HttpResponse error(int status, const QString& message) {
     return json(status, QJsonObject{{"error", message}});
 }
 
-// Compares digests so the time taken does not depend on how much of the key matches.
 bool sameKey(const QByteArray& given, const QString& expected) {
     const QByteArray a = QCryptographicHash::hash(given, QCryptographicHash::Sha256);
     const QByteArray b = QCryptographicHash::hash(expected.toUtf8(), QCryptographicHash::Sha256);
@@ -249,9 +248,9 @@ HttpResponse AdminService::status() {
     const ServerConfig& c = service_->config();
     const auto list = storage_->players();
     return json(200, QJsonObject{
-                         {"version", Revelations::version()},
-                         {"commit", Revelations::commit()},
-                         {"build_timestamp", Revelations::buildTimestamp()},
+                         {"version", Revelations::Version()},
+                         {"build_date", Revelations::BuildDate()},
+                         {"build_timestamp", Revelations::BuildTimestamp()},
                          {"uptime", uptime_.elapsed() / 1000},
                          {"listen", QStringLiteral("%1:%2").arg(c.address.toString()).arg(c.port)},
                          {"base_path", c.basePath},

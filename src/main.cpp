@@ -48,9 +48,10 @@ int fatal(const QString& message) {
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("revelations-server"));
-    QCoreApplication::setApplicationVersion(Revelations::version());
+    QCoreApplication::setApplicationVersion(Revelations::Version());
     qSetMessagePattern(QStringLiteral("%{time yyyy-MM-dd hh:mm:ss} [%{type}] %{message}"));
-    const QString versionLine = Revelations::versionLine(QStringLiteral("revelations-server"));
+    const QString versionLine = QStringLiteral("revelations-server %1 (built %2)")
+                                    .arg(Revelations::Version(), Revelations::BuildTimestamp());
     qInfo("%s", qPrintable(versionLine));
 
     // config.json in the working directory, created with defaults on the first run.

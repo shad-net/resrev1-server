@@ -3,27 +3,55 @@
 
 #include "version.h"
 
-#include "build_info.h"
+#include <QDate>
+#include <QLatin1String>
+#include <QStringList>
+
+namespace {
+
+constexpr const char* m_version = "0.0.4";
+
+QString IsoBuildDate() {
+    static const QStringList months = {
+        QStringLiteral("Jan"), QStringLiteral("Feb"), QStringLiteral("Mar"), QStringLiteral("Apr"),
+        QStringLiteral("May"), QStringLiteral("Jun"), QStringLiteral("Jul"), QStringLiteral("Aug"),
+        QStringLiteral("Sep"), QStringLiteral("Oct"), QStringLiteral("Nov"), QStringLiteral("Dec")};
+
+    const QString raw = QString::fromLatin1(__DATE__);
+    const QStringList parts = raw.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() != 3) {
+        return raw;
+    }
+
+    const int month = months.indexOf(parts.at(0)) + 1;
+    const int day = parts.at(1).toInt();
+    const int year = parts.at(2).toInt();
+    const QDate date(year, month, day);
+    if (!date.isValid()) {
+        return raw;
+    }
+    return date.toString(QStringLiteral("yyyy-MM-dd"));
+}
+
+} // namespace
 
 namespace Revelations {
 
-QString version() {
-    return QStringLiteral(REVELATIONS_VERSION);
+QString Version() {
+    return QString::fromLatin1(m_version);
 }
 
-QString commit() {
-    return QStringLiteral(REVELATIONS_GIT_COMMIT);
+QString BuildDate() {
+    static const QString cached = IsoBuildDate();
+    return cached;
 }
 
-QString buildTimestamp() {
-    return QStringLiteral(REVELATIONS_BUILD_TIMESTAMP);
+QString BuildTime() {
+    return QString::fromLatin1(__TIME__);
 }
 
-QString versionLine(const QString& program) {
-    const QString built = QStringLiteral("built %1").arg(buildTimestamp());
-    return QStringLiteral("%1 %2 (%3)")
-        .arg(program, version(),
-             commit().isEmpty() ? built : commit() + QStringLiteral(", ") + built);
+QString BuildTimestamp() {
+    return BuildDate() + QLatin1Char('T') + BuildTime();
 }
 
 } // namespace Revelations

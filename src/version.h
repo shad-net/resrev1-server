@@ -6,10 +6,9 @@
 #include <QString>
 
 namespace Revelations {
-
-QString version();
-QString commit();
-QString buildTimestamp();
-QString versionLine(const QString& program);
+QString Version();
+QString BuildTimestamp();
+QString BuildDate();
+QString BuildTime();
 
 } // namespace Revelations

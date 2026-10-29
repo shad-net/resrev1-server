@@ -120,7 +120,7 @@ QString playerTarget(const QJsonObject& p) {
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle(tr("Revelations Admin %1").arg(Revelations::version()));
+    setWindowTitle(tr("Revelations Admin %1").arg(Revelations::Version()));
 
     QSettings settings;
     url_ = new QLineEdit(settings.value("url", QStringLiteral("http://127.0.0.1:8081")).toString());
@@ -337,7 +337,7 @@ void MainWindow::refreshTraffic() {
              [this](const ApiClient::Reply& r) {
                  trafficBusy_ = false;
                  if (!r.ok()) {
-                     return; // the next poll tries again; Connect reports a lost server
+                     return;
                  }
                  const QJsonObject reply = r.json().object();
                  // A restarted server counts from 1 again.
@@ -402,7 +402,6 @@ void MainWindow::showTrafficEntry() {
             return;
         }
         const QJsonObject e = r.json().object();
-        // JSON bodies arrive compact; show them indented.
         const auto pretty = [](const QString& text) {
             const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
             return doc.isNull() ? text
@@ -823,16 +822,10 @@ void MainWindow::connectToServer() {
             return;
         }
         const QJsonObject s = r.json().object();
-        // Servers from before version reporting send "1.0" without a commit.
         const QString serverVersion = s.value("version").toString();
-        const QString serverCommit = s.value("commit").toString();
         QString versions = tr("server %1").arg(serverVersion);
-        if (!serverCommit.isEmpty()) {
-            versions += QStringLiteral(" (%1)").arg(serverCommit);
-        }
-        if (serverVersion != Revelations::version()) {
-            versions += tr(", this admin app is %1: some features may not match")
-                            .arg(Revelations::version());
+        if (!serverVersion.isEmpty() && serverVersion != Revelations::Version()) {
+            versions += tr(" (this admin app is %1)").arg(Revelations::Version());
         }
         server_->setText(tr("Game server %1%2  ·  shadNet %3  ·  up %4 min  ·  %5")
                              .arg(s.value("listen").toString(), s.value("base_path").toString(),
@@ -840,9 +833,9 @@ void MainWindow::connectToServer() {
                              .arg(s.value("uptime").toInteger() / 60)
                              .arg(versions));
         server_->setToolTip(
-            tr("Server built %1\nAdmin app: %2")
-                .arg(s.value("build_timestamp").toString(),
-                     Revelations::versionLine(QStringLiteral("revelations-admin"))));
+            tr("Server %1, built %2\nAdmin app %3, built %4")
+                .arg(serverVersion, s.value("build_timestamp").toString().replace('T', ' '),
+                     Revelations::Version(), Revelations::BuildTimestamp().replace('T', ' ')));
         lastTrafficId_ = 0;
         trafficTable_->setRowCount(0);
         refresh();

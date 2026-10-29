@@ -11,7 +11,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setOrganizationName(QStringLiteral("revelations-server"));
     QApplication::setApplicationName(QStringLiteral("revelations-admin"));
-    QApplication::setApplicationVersion(Revelations::version());
+    QApplication::setApplicationVersion(Revelations::Version());
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Admin client for revelations-server."));
